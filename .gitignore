@@ -4,8 +4,11 @@ holding
 scans
 .venv/
 .venv-photo/
+.venv-cloud/
 # Keep actual user scans local.
 /sample-data/
+
+
 
 # Generated data, local configuration, and credentials
 /data/
@@ -28,3 +31,4 @@ __pycache__/
 .pytest_cache/
 node_modules/
 dist/
+.venv-cloud/

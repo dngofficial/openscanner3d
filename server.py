@@ -1,4 +1,4 @@
-"""Photo-to-3D localhost application. Run python server.py and open localhost:8000."""
+"""Live camera to local clouds, followed by global alignment and fusion. Run python server.py and open localhost:8000."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -11,7 +11,7 @@ from threading import Event, RLock
 import uuid
 
 import cv2
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 import numpy as np
@@ -19,6 +19,8 @@ from pydantic import BaseModel
 import uvicorn
 
 from reconstruction import find_colmap, reconstruct
+from depth_cloud import ENGINE
+from video_capture import Capture
 
 BASE = Path(__file__).resolve().parent
 SCANS = BASE / "scans"
@@ -27,8 +29,10 @@ MAX_PHOTOS = 200
 MAX_PIXELS = 36_000_000
 ACTIVE = {"queued", "running"}
 OUTPUTS = {"sparse.ply", "dense.ply", "mesh.ply", "mesh.obj", "mesh.glb",
-           "results.zip", "preview.json", "report.json", "reconstruction.log"}
+           "results.zip", "preview.json", "report.json", "reconstruction.log",
+           "merged.ply", "merged_preview.json", "alignment.json"}
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reconstruction")
+DEPTH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="depth-loader")
 SESSIONS = {}
 REGISTRY_LOCK = RLock()
 
@@ -42,12 +46,13 @@ class Session:
         (self.root / "thumbs").mkdir(exist_ok=True)
         self.lock = RLock()
         self.cancel = Event()
-        self.data = data or dict(state="collecting", stage="photos", progress=0,
-                                 message="Add photos of the same object from different angles.", photos=[],
+        self.live_connected = False
+        self.data = data or dict(state="collecting", stage="capture", progress=0,
+                                 message="Start live capture, then finish to align saved clouds.", photos=[],
                                  registered_images=0, points=0)
         if data and data["state"] in ACTIVE:
             self.data.update(state="failed", stage="interrupted",
-                             message="The server stopped during reconstruction. Your photos are kept; start again.")
+                             message="The server stopped during alignment. Captured data is kept; start alignment again.")
         self.persist()
 
     def persist(self):
@@ -87,7 +92,7 @@ def invalidate_outputs(session):
     for name in OUTPUTS:
         (session.root / name).unlink(missing_ok=True)
     session.data.update(state="collecting", stage="photos", progress=0,
-                        registered_images=0, points=0, message="Photo set updated. Ready to reconstruct.")
+                        registered_images=0, points=0, accepted_clouds=0, skipped_clouds=0, merged_points=0, message="Photo set updated. Ready to reconstruct.")
 
 
 def normalize_photo(payload):
@@ -141,6 +146,7 @@ async def lifespan(app):
         for session in SESSIONS.values():
             session.cancel.set()
     await asyncio.to_thread(POOL.shutdown, wait=True, cancel_futures=True)
+    DEPTH_POOL.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -163,7 +169,7 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"colmap": bool(find_colmap()), "max_photos": MAX_PHOTOS, "max_upload_mb": 20}
+    return {"colmap": bool(find_colmap()), "max_photos": MAX_PHOTOS, "max_upload_mb": 20, "depth": ENGINE.status()}
 
 
 @app.post("/api/scans")
@@ -223,6 +229,9 @@ def remove_photo(scan_id: str, photo_id: str):
         session.data["photos"].remove(existing)
         (session.root / "images" / (photo_id + ".jpg")).unlink(missing_ok=True)
         (session.root / "thumbs" / (photo_id + ".jpg")).unlink(missing_ok=True)
+        (session.root / "depth" / (photo_id + ".npz")).unlink(missing_ok=True)
+        (session.root / "clouds" / (photo_id + ".ply")).unlink(missing_ok=True)
+        (session.root / "masks" / (photo_id + ".jpg.png")).unlink(missing_ok=True)
         invalidate_outputs(session)
         session.persist()
     return session.snapshot()
@@ -251,6 +260,7 @@ def photo_image(scan_id: str, photo_id: str):
 class BuildOptions(BaseModel):
     dense: bool = True
     shared_camera: bool = False
+    merge_live: bool = False
 
 
 def run_job(session, options):
@@ -258,7 +268,7 @@ def run_job(session, options):
         session.update(state="cancelled", stage="cancelled", message="Reconstruction cancelled.")
         return
     session.update(state="running", message="Starting reconstruction…")
-    reconstruct(session.root, options.dense, options.shared_camera, session.cancel, session.update)
+    reconstruct(session.root, options.dense, options.shared_camera, session.cancel, session.update, merge_live=options.merge_live)
 
 
 @app.post("/api/scans/{scan_id}/build")
@@ -267,7 +277,7 @@ def build(scan_id: str, options: BuildOptions):
     with session.lock:
         ensure_editable(session)
         if len(session.data["photos"]) < 3:
-            raise HTTPException(400, "Add at least 3 distinct overlapping photos. 20–80 is a better starting set.")
+            raise HTTPException(400, "Save at least 3 overlapping camera views. 20–80 is a better starting set.")
         if options.shared_camera and len({(p["width"], p["height"]) for p in session.data["photos"]}) > 1:
             raise HTTPException(400, "Shared camera requires matching image dimensions. Uncheck it for this photo set.")
         if not find_colmap():
@@ -297,6 +307,74 @@ def result_file(scan_id: str, filename: str):
     path = session.root / filename
     if not path.is_file(): raise HTTPException(404)
     return FileResponse(path, filename=filename, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/depth/load")
+def load_depth():
+    with ENGINE.status_lock:
+        if ENGINE.state not in {"ready", "loading"}:
+            ENGINE.state = "loading"
+            DEPTH_POOL.submit(ENGINE.load)
+    return ENGINE.status()
+
+
+@app.get("/api/depth")
+def depth_status():
+    return ENGINE.status()
+
+
+@app.websocket("/ws/{scan_id}")
+async def live_feed(ws: WebSocket, scan_id: str):
+    origin = ws.headers.get("origin")
+    host = ws.headers.get("host", "")
+    if origin and origin not in {f"http://{host}", f"https://{host}"}:
+        await ws.close(code=1008); return
+    try:
+        session = get_session(scan_id)
+    except HTTPException:
+        await ws.close(code=1008); return
+    with session.lock:
+        if session.live_connected or session.data["state"] in ACTIVE:
+            await ws.close(code=1008); return
+        session.live_connected = True
+    try:
+        await ws.accept()
+        capture = await asyncio.to_thread(Capture, session, ENGINE)
+        await ws.send_json({"type":"ready", "saved_count":len(session.data["photos"]),
+                            "processed":session.data.get("processed_frames",0)})
+        while True:
+            message = await ws.receive()
+            if message["type"] == "websocket.disconnect": break
+            if message.get("bytes") is not None:
+                try:
+                    reply = await asyncio.to_thread(capture.process, message["bytes"])
+                except Exception as error:
+                    reply = dict(type="error", message=str(error))
+                await ws.send_json(reply)
+            elif message.get("text", "").startswith("{"):
+                try:
+                    settings=json.loads(message["text"])
+                    if settings.get("type")!="settings": raise ValueError("Unknown command")
+                    roi=settings.get("roi",[.1,.08,.9,.92])
+                    if len(roi)!=4 or not all(isinstance(v,(int,float)) and np.isfinite(v) for v in roi):
+                        raise ValueError("Invalid object rectangle.")
+                    if not (0<=roi[0]<roi[2]<=1 and 0<=roi[1]<roi[3]<=1):
+                        raise ValueError("Invalid object rectangle.")
+                    capture.settings=dict(background=bool(settings.get("background",True)),
+                                          denoise=bool(settings.get("denoise",True)),roi=roi)
+                    with session.lock:
+                        session.data["capture_settings"]=capture.settings
+                        session.persist()
+                    await ws.send_json({"type":"settings","message":"Background cleanup settings updated."})
+                except (ValueError,TypeError) as error:
+                    await ws.send_json({"type":"command_error","message":str(error)})
+            elif message.get("text") == "capture":
+                capture.force = True
+                await ws.send_json({"type":"capture", "message":"The next processed frame will be saved."})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        with session.lock: session.live_connected = False
 
 
 if __name__ == "__main__":

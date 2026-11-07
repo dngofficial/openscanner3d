@@ -103,7 +103,7 @@ def create_preview(points_path, output, limit=6000):
 def package_results(root, model):
     with zipfile.ZipFile(root / "results.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         for name in ("sparse.ply", "dense.ply", "mesh.ply", "mesh.obj", "mesh.glb",
-                     "preview.json", "report.json", "reconstruction.log"):
+                     "preview.json", "report.json", "reconstruction.log", "merged.ply", "merged_preview.json", "alignment.json"):
             path = root / name
             if path.is_file():
                 archive.write(path, name)
@@ -113,7 +113,7 @@ def package_results(root, model):
                     archive.write(file, "colmap_model/" + file.name)
 
 
-def reconstruct(root, dense, shared_camera, cancel, update):
+def reconstruct(root, dense, shared_camera, cancel, update, merge_live=False):
     root = Path(root)
     log = root / "reconstruction.log"
     model = None
@@ -133,11 +133,13 @@ def reconstruct(root, dense, shared_camera, cancel, update):
         size_option = compatible_option(extract_help, "FeatureExtraction.max_image_size", "SiftExtraction.max_image_size")
         gpu_match = compatible_option(match_help, "FeatureMatching.use_gpu", "SiftMatching.use_gpu")
         update(stage="features", progress=10, message="Finding image features on the CPU…")
-        execute(exe, "feature_extractor", [
-            "--database_path", database, "--image_path", root / "images",
-            "--ImageReader.camera_model", "SIMPLE_RADIAL",
-            "--ImageReader.single_camera", "1" if shared_camera else "0",
-            gpu_extract, "0", size_option, "2400"], log, cancel)
+        extraction = ["--database_path", database, "--image_path", root / "images",
+                      "--ImageReader.camera_model", "SIMPLE_RADIAL",
+                      "--ImageReader.single_camera", "1" if shared_camera else "0",
+                      gpu_extract, "0", size_option, "2400"]
+        if merge_live and (root / "masks").is_dir():
+            extraction += ["--ImageReader.mask_path", root / "masks"]
+        execute(exe, "feature_extractor", extraction, log, cancel)
         update(stage="matching", progress=25, message="Matching photos to find overlapping views…")
         execute(exe, "exhaustive_matcher", ["--database_path", database, gpu_match, "0"], log, cancel)
         update(stage="sparse", progress=40, message="Estimating camera positions and reconstructing sparse geometry…")
@@ -161,6 +163,11 @@ def reconstruct(root, dense, shared_camera, cancel, update):
         create_preview(text_model / "points3D.txt", root / "preview.json")
         sparse_ready = True
         update(stage="sparse_ready", progress=60, message="Sparse reconstruction is ready.", **report)
+        if merge_live:
+            from cloud_fusion import merge_live_clouds
+            merged = merge_live_clouds(root, text_model, cancel, update)
+            report.update(merged)
+            update(**{k: merged[k] for k in ("accepted_clouds", "skipped_clouds", "merged_points")})
         if dense:
             workspace = attempt / "dense"
             workspace.mkdir()
@@ -189,7 +196,9 @@ def reconstruct(root, dense, shared_camera, cancel, update):
             raise Cancelled()
         package_results(root, model)
         update(state="completed", stage="done", progress=100,
-               message="Mesh reconstruction complete." if dense else "Sparse point cloud complete. Choose mesh mode for a surface.",
+               message=(f"Aligned {report['accepted_clouds']} clouds into one point cloud; {report['skipped_clouds']} skipped."
+                        if merge_live else "Mesh reconstruction complete." if dense
+                        else "Sparse point cloud complete. Choose mesh mode for a surface."),
                **report)
     except Cancelled:
         update(state="cancelled", stage="cancelled", message="Reconstruction cancelled. Uploaded photos are kept.")

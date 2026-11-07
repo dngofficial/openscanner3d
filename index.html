@@ -1,272 +1,243 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Photo → 3D · Object reconstruction</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live camera → merged point cloud</title>
 <style>
-:root{color-scheme:dark;--bg:#101417;--panel:#192126;--line:#324249;--text:#edf2eb;--muted:#a2b3b7;--accent:#a8e3ad;--warn:#ffcb80}
+:root{color-scheme:dark;--bg:#101719;--panel:#1b262a;--line:#385052;--text:#e6eeea;--dim:#a3b8b6;--mint:#a4dfb0;--amber:#ffca78}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
-header{padding:28px 32px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:20px}
-h1{font-size:27px;letter-spacing:-.8px;margin:0}h2{font-size:17px;margin:0 0 12px}p{margin:8px 0}small,.muted{color:var(--muted)}
-.tag{text-transform:uppercase;letter-spacing:2px;font-size:11px;color:var(--accent);margin-bottom:7px}
-main{max-width:1500px;margin:auto;padding:24px 32px;display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:22px}
-.workspace{min-width:0;display:flex;flex-direction:column;gap:20px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.actions{display:flex;gap:8px;flex-wrap:wrap}
-button,.button,select{font:inherit;border:1px solid var(--line);border-radius:7px;padding:10px 14px;color:var(--text);background:#233039;cursor:pointer;text-decoration:none}
-button.primary{background:var(--accent);color:#142719;border-color:var(--accent);font-weight:650}button:disabled{opacity:.45;cursor:not-allowed}
-button:focus-visible,input:focus-visible,.drop:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.drop{border:1px dashed #688379;border-radius:9px;padding:25px;text-align:center;background:#15231f;cursor:pointer}
-.drop.over{background:#244a35;border-color:var(--accent)}.drop strong{display:block;font-size:19px;margin:0 0 5px}.drop[aria-disabled=true]{opacity:.5;cursor:wait}
-#gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:18px}
-.card{position:relative;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#11191d}
-.card.selected{border:2px solid var(--accent)}.card button.photo{display:block;padding:0;width:100%;border:0;background:transparent;text-align:left}
-.card img{width:100%;height:100px;object-fit:cover;display:block}.caption{display:block;padding:7px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
-.badge{font-size:11px;color:var(--warn);padding:0 8px 7px;display:block}.remove{position:absolute;right:4px;top:4px;border-radius:5px;padding:0 7px;background:#141b20e8;font-size:20px}
-.empty{padding:25px 0;text-align:center;color:var(--muted)}.preview-wrap{min-height:230px;display:grid;place-items:center;overflow:hidden;background:#0b1013;border-radius:8px;position:relative}
-canvas{display:block;width:100%;height:auto;max-height:620px;object-fit:contain}#photoCanvas{display:none}
-#viewer{height:360px;touch-action:none;cursor:grab}#viewer:active{cursor:grabbing}
-#photoTitle{overflow-wrap:anywhere}.quality{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}.pill{background:#24343a;border-radius:30px;padding:4px 10px;font-size:12px}
-.sidebar{display:flex;flex-direction:column;gap:18px;align-self:start}.instructions{margin:0;padding-left:21px;color:var(--muted)}.instructions li{margin:8px 0}
-label.option{display:flex;gap:8px;align-items:flex-start;margin:12px 0}input[type=checkbox]{accent-color:var(--accent);margin-top:5px}
-select{width:100%;margin:7px 0}.full{width:100%}progress{width:100%;height:10px;accent-color:var(--accent);margin-top:12px}
-#message{overflow-wrap:anywhere}.stage{color:var(--accent);font-size:12px;text-transform:uppercase;letter-spacing:1px}
-#notice{color:var(--warn);min-height:23px;margin:12px 0 0;overflow-wrap:anywhere}
-#downloads{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}#downloads a{font-size:13px;color:var(--accent);border:1px solid var(--line);border-radius:6px;padding:7px 10px;text-decoration:none}
-hr{border:0;border-top:1px solid var(--line);margin:18px 0}.status{border:1px solid var(--line);border-radius:20px;padding:6px 12px;font-size:12px;white-space:nowrap}
-@media(max-width:950px){main{grid-template-columns:1fr}.sidebar{display:grid;grid-template-columns:1fr 1fr}}
-@media(max-width:600px){header{padding:20px;align-items:flex-start;flex-direction:column}main{padding:16px;gap:16px}.sidebar{display:flex}h1{font-size:24px}.panel{padding:16px}#viewer{height:280px}}
+header{padding:22px 28px;border-bottom:1px solid var(--line)}h1{margin:0;font-size:26px;letter-spacing:-.5px}h2{font-size:16px;margin:0 0 10px}p{margin:8px 0}
+main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;max-width:1600px;padding:22px 28px;margin:auto}
+.workspace{min-width:0;display:flex;flex-direction:column;gap:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.muted,small{color:var(--dim)}button,select{font:inherit;background:#24383c;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px 12px}
+button{cursor:pointer}button:disabled,select:disabled{opacity:.45;cursor:not-allowed}.primary{background:var(--mint);border-color:var(--mint);color:#13291b;font-weight:650}
+.full{width:100%}.row{display:flex;gap:8px;flex-wrap:wrap}.row button{flex:1}label{display:block;margin:12px 0}label.inline{display:flex;gap:8px;align-items:center}
+input{accent-color:var(--mint)}video{width:100%;height:auto;display:block;background:#090e10;border-radius:5px}
+.video-wrap{position:relative;background:#090e10}#roi{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+img{width:100%;display:block;aspect-ratio:4/3;object-fit:contain;background:#090e10;border-radius:5px}img:not([src]){visibility:hidden}
+.depth-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.depth-grid h2{font-size:13px}
+.cloud{width:100%;height:330px;display:block;background:#090e10;touch-action:none;cursor:grab;border-radius:6px}
+aside{display:flex;flex-direction:column;gap:18px;align-self:start}.status{font-size:13px;color:var(--mint);margin:8px 0;overflow-wrap:anywhere}#error{color:var(--amber);overflow-wrap:anywhere}
+dl{display:grid;grid-template-columns:1fr auto;gap:7px;margin:0}dt{color:var(--dim)}dd{margin:0;text-align:right}
+progress{width:100%;accent-color:var(--mint)}#downloads a{display:block;color:var(--mint);padding:6px 0}hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+summary{cursor:pointer}details p{font-size:13px;color:var(--dim)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+@media(max-width:1050px){main{grid-template-columns:1fr}aside{display:grid;grid-template-columns:1fr 1fr}}
+@media(max-width:650px){main{padding:16px}.grid{grid-template-columns:1fr}aside{display:flex}header{padding:18px}.cloud{height:280px}}
 </style>
 </head>
 <body>
-<header>
-  <div><div class="tag">Object reconstruction</div><h1>Your photos. One 3D model.</h1><p class="muted">Add overlapping views, inspect the images, then build the geometry.</p></div>
-  <div id="engine" class="status">Checking reconstruction engine…</div>
-</header>
+<header><h1>Live camera → point clouds → one merged cloud</h1><p class="muted">Capture local clouds now. Align them into a shared 3D scene when you finish.</p></header>
 <main>
 <div class="workspace">
-<section class="panel">
-  <div class="row"><h2>01 · Add your photos <span id="count" class="muted">0 / 200</span></h2><button id="newScan">New photo set</button></div>
-  <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
-  <div id="drop" class="drop" role="button" tabindex="0" aria-label="Choose photos to upload" aria-disabled="false">
-    <strong>Drop photos here, or click to choose</strong>
-    <span class="muted">JPEG, PNG or WebP · up to 200 photos · 20 MB each</span>
-  </div>
-  <div class="row" style="margin-top:12px"><small>Start with 20–80 sharp photos around a stationary object.</small><span id="uploadStatus" class="muted" role="status"></span></div>
-  <p id="notice" role="alert"></p>
-  <div id="gallery"><div class="empty">Your photo set will appear here.</div></div>
+<div class="grid">
+<section class="panel"><h2>Camera · select the object region</h2>
+<div class="video-wrap"><video id="video" width="640" height="480" autoplay playsinline muted></video><canvas id="roi" width="640" height="480" aria-label="Drag to select the object rectangle"></canvas></div>
+<small>Drag a rectangle around the entire object. Keep it inside this region as you move.</small>
 </section>
-<section class="panel">
-  <div class="row"><h2 id="photoTitle">02 · Inspect a photo</h2><label><input id="overlays" type="checkbox" checked> Show feature indicators</label></div>
-  <div class="preview-wrap"><p id="photoEmpty" class="muted">Select an uploaded photo to inspect its detail.</p><canvas id="photoCanvas" aria-label="Selected photo and detected feature region"></canvas></div>
-  <div id="quality" class="quality"></div>
-  <p class="muted"><small>Cyan dots show image detail; the amber box shows feature spread. These are quality guides, not object detection. Warnings do not block reconstruction.</small></p>
-</section>
-<section class="panel">
-  <div class="row"><h2>03 · Reconstructed point cloud</h2><button id="resetView">Reset view</button></div>
-  <canvas id="viewer" width="1000" height="440" aria-label="Interactive sparse point cloud preview"></canvas>
-  <small id="previewNote">A preview appears after camera alignment. Drag to rotate; scroll or pinch to zoom. Mesh files are available below after a successful mesh build.</small>
-  <div id="downloads"></div>
+<section class="panel"><h2>Live preprocessing</h2>
+<div class="depth-grid"><div><h2>Estimated relative depth</h2><img id="depth" alt="Estimated relative depth of the latest processed frame"></div><div><h2>Foreground mask</h2><img id="mask" alt="Foreground retained for point-cloud generation"></div></div>
+<p id="frameNote" class="status">Waiting for a processed frame.</p><small>The mask removes background pixels before point-cloud generation. Disable it for a whole-scene scan.</small>
 </section>
 </div>
-<aside class="sidebar">
-<section class="panel">
-  <h2>Build settings</h2>
-  <label for="mode" class="muted">Output</label>
-  <select id="mode"><option value="mesh">Mesh + point cloud · NVIDIA / CUDA</option><option value="sparse">Sparse point cloud · CPU</option></select>
-  <p class="muted"><small>CPU mode creates sparse geometry. Mesh mode adds dense depth estimation and surface reconstruction; it needs a compatible CUDA-enabled COLMAP installation.</small></p>
-  <label class="option"><input id="sameCamera" type="checkbox"><span>Same camera and fixed zoom<br><small>Enable only if all photos use the same lens, zoom and image dimensions.</small></span></label>
-  <button id="build" class="primary full" disabled>Build 3D model</button>
-  <button id="cancel" class="full" style="display:none;margin-top:8px">Cancel reconstruction</button>
-  <hr>
-  <div id="stage" class="stage">Waiting for photos</div>
-  <progress id="progress" max="100" value="0" aria-label="Reconstruction stage progress"></progress>
-  <p id="message" role="status">Add photos to begin.</p>
-  <small id="stats">Progress indicates pipeline stages, not estimated time.</small>
+<div class="grid">
+<section class="panel"><h2>Current frame point cloud</h2><canvas id="localCloud" class="cloud" width="800" height="500" aria-label="Current camera-frame point cloud"></canvas><small>Unregistered relative-depth preview. Drag to rotate; scroll or pinch to zoom.</small></section>
+<section class="panel"><h2>Final aligned and merged cloud</h2><canvas id="mergedCloud" class="cloud" width="800" height="500" aria-label="Final merged point cloud"></canvas><p id="mergeNote" class="muted">Appears after Finish &amp; align.</p><div id="downloads"></div></section>
+</div>
+</div>
+<aside>
+<section class="panel"><h2>Capture</h2>
+<div id="engine" class="status">Checking engines…</div>
+<button id="loadModel" class="full">1 · Load depth model</button>
+<label for="camera">Camera</label><select id="camera" class="full"><option value="">Default camera</option></select>
+<button id="start" class="primary full" style="margin-top:12px" disabled>2 · Start live capture</button>
+<div class="row" style="margin-top:10px"><button id="pause" disabled>Pause</button><button id="save" disabled>Save cloud now</button></div>
+<button id="finish" class="primary full" style="margin-top:12px" disabled>3 · Finish &amp; align clouds</button>
+<button id="cancel" class="full" style="margin-top:10px;display:none">Cancel alignment</button>
+<button id="new" class="full" style="margin-top:10px">New scan</button>
+<p id="status" class="status" role="status">Load the model, then start your camera.</p><p id="error" role="alert"></p>
+<hr><h2>Background and noise</h2>
+<label class="inline"><input id="background" type="checkbox" checked> Remove background inside selected region</label>
+<label class="inline"><input id="denoise" type="checkbox" checked> Reduce image noise</label>
+<button id="resetROI">Reset object region</button>
+<small style="display:block;margin-top:10px">Inspect the foreground mask. Color-based separation can miss similar-colored surfaces. Final fusion also removes points seen in only one cloud and isolated outliers.</small>
 </section>
-<section class="panel">
-  <h2>Capture a useful photo set</h2>
-  <ol class="instructions">
-    <li>Keep the object still and move the camera around it. Aim for substantial overlap between neighboring views.</li>
-    <li>Take a full circle at mid height, then another from a higher angle. Include close detail without changing zoom.</li>
-    <li>Use soft, consistent light and a matte object with visible surface detail. Avoid motion blur, glare and blank surfaces.</li>
-    <li>Keep the object centered. The reconstructed scene can include the background; this app does not isolate the object automatically.</li>
-  </ol>
-  <p class="muted"><small>A few unrelated angles will rarely align. Uploaded photos stay on this computer in the scan folder.</small></p>
+<section class="panel"><h2>Collected geometry</h2><dl>
+<dt>Frames processed</dt><dd id="processed">0</dd><dt>Clouds saved</dt><dd id="saved">0 / 200</dd>
+<dt>Current cloud points</dt><dd id="pointCount">0</dd><dt>Foreground retained</dt><dd id="foreground">–</dd><dt>Processing time</dt><dd id="timing">–</dd><dt>Clouds aligned</dt><dd id="aligned">–</dd><dt>Merged points</dt><dd id="mergedCount">–</dd>
+</dl><hr><progress id="progress" max="100" value="0" aria-label="Alignment stage progress"></progress><p id="buildStatus" class="muted">Alignment runs after capture.</p>
+<details><summary>How this works</summary><p>Each processed frame produces an estimated-depth cloud. Different camera views are saved with RGB, depth and foreground masks. Finish computes camera poses with COLMAP, calibrates each usable depth map against shared 3D landmarks, and fuses the aligned points.</p><p>A normal webcam does not measure depth. Geometry and scale are estimates, and some clouds may not align. Move the camera around a stationary object with plenty of overlapping views. Results use arbitrary units.</p><p>The first model load downloads weights from Hugging Face. CPU inference works but can be slow; compatible PyTorch CUDA support speeds it up. COLMAP is required for final alignment.</p></details>
 </section>
 </aside>
 </main>
 <script>
-const $=id=>document.getElementById(id);
-let scan=null, health=null, uploading=false, selected=null, selectedImage=null, pollTimer=null, previewKey=null, points=[];
-let yaw=.4,pitch=-.2,zoom=1;
-const active=()=>scan&&['queued','running'].includes(scan.state);
-function notify(msg){$('notice').textContent=msg;}
+const $=id=>document.getElementById(id), video=$('video'),grab=document.createElement('canvas');
+let scan=null,health=null,model=null,stream=null,ws=null,capturing=false,inFlight=false,finishPending=false,frameTimer=null,pollTimer=null,modelTimer=null,wsReady=false;
+let region=[.1,.08,.9,.92],finalKey=null;
+function error(message){$('error').textContent=message;}
 async function api(path,options={}){
-  const response=await fetch(path,options);
-  if(!response.ok){let error;try{error=await response.json();}catch{}throw new Error(typeof error?.detail==='string'?error.detail:'Request failed ('+response.status+').');}
-  return response.json();
+ const r=await fetch(path,options);if(!r.ok){let d;try{d=await r.json();}catch{}throw Error(typeof d?.detail==='string'?d.detail:'Request failed ('+r.status+').');}return r.json();
 }
-function base(){return '/api/scans/'+scan.id;}
-function clearModel(){points=[];previewKey=null;drawCloud();$('previewNote').textContent='A preview appears after camera alignment. Drag to rotate; scroll or pinch to zoom.';}
+const base=()=>'/api/scans/'+scan.id;
+const building=()=>scan&&['queued','running'].includes(scan.state);
+function refreshButtons(){
+ const busy=building()||finishPending;
+ $('start').disabled=!scan||model?.state!=='ready'||capturing||busy;
+ $('pause').disabled=!capturing;$('save').disabled=!capturing;
+ $('finish').disabled=!scan||scan.photos.length<3||busy||!health?.colmap;
+ $('new').disabled=busy||inFlight;
+ $('camera').disabled=!!stream||busy;
+ $('background').disabled=busy;$('denoise').disabled=busy;$('resetROI').disabled=busy;
+ $('cancel').style.display=building()?'block':'none';
+ $('loadModel').disabled=model?.state==='loading'||model?.state==='ready';
+}
+function settings(){
+ if(wsReady&&ws?.readyState===1)ws.send(JSON.stringify({type:'settings',background:$('background').checked,denoise:$('denoise').checked,roi:region}));
+ drawRegion();
+}
+function drawRegion(){
+ const canvas=$('roi'),c=canvas.getContext('2d');canvas.width=video.videoWidth||640;canvas.height=video.videoHeight||480;
+ c.clearRect(0,0,canvas.width,canvas.height);
+ if(!$('background').checked)return;
+ const [x0,y0,x1,y1]=region;c.strokeStyle='#ffca78';c.lineWidth=3;
+ c.strokeRect(x0*canvas.width,y0*canvas.height,(x1-x0)*canvas.width,(y1-y0)*canvas.height);
+}
+let dragStart=null;
+function mouseRegion(e){const r=$('roi').getBoundingClientRect();return [Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))];}
+$('roi').onpointerdown=e=>{if(building())return;dragStart=mouseRegion(e);$('roi').setPointerCapture(e.pointerId);};
+$('roi').onpointermove=e=>{if(!dragStart||building())return;const p=mouseRegion(e);region=[Math.min(p[0],dragStart[0]),Math.min(p[1],dragStart[1]),Math.max(p[0],dragStart[0]),Math.max(p[1],dragStart[1])];drawRegion();};
+$('roi').onpointerup=()=>{if(!dragStart)return;dragStart=null;if(region[2]-region[0]<.08||region[3]-region[1]<.08)region=[.1,.08,.9,.92];settings();};
+$('roi').onpointercancel=()=>{dragStart=null;};
+$('resetROI').onclick=()=>{region=[.1,.08,.9,.92];settings();};
+$('background').onchange=settings;$('denoise').onchange=settings;
+function pause(){capturing=false;clearTimeout(frameTimer);$('status').textContent='Capture paused. Saved clouds are kept.';refreshButtons();}
+function scheduleFrame(){clearTimeout(frameTimer);if(capturing&&wsReady&&!inFlight)frameTimer=setTimeout(sendFrame,120);}
+function sendFrame(){
+ if(!capturing||!wsReady||inFlight)return;
+ if(video.readyState<2){scheduleFrame();return;}
+ inFlight=true;refreshButtons();grab.width=640;grab.height=Math.max(240,Math.round(640*video.videoHeight/video.videoWidth));
+ grab.getContext('2d').drawImage(video,0,0,grab.width,grab.height);
+ grab.toBlob(blob=>{if(blob&&ws?.readyState===1)ws.send(blob);else{inFlight=false;pause();error('Camera frame could not be sent.');}},'image/jpeg',.92);
+}
+function connectSocket(){
+ return new Promise((resolve,reject)=>{
+  const socket=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/'+scan.id);ws=socket;wsReady=false;
+  socket.onmessage=e=>{
+   if(ws!==socket)return;
+   const r=JSON.parse(e.data);
+   if(r.type==='ready'){wsReady=true;settings();resolve();return;}
+   if(r.type==='frame'){
+    inFlight=false;
+    if(r.depth)$('depth').src='data:image/jpeg;base64,'+r.depth;else $('depth').removeAttribute('src');
+    if(r.mask)$('mask').src='data:image/jpeg;base64,'+r.mask;
+    localViewer.set(r.cloud);
+    $('processed').textContent=r.processed;$('saved').textContent=r.saved_count+' / 200';
+    $('pointCount').textContent=r.local_points.toLocaleString();$('timing').textContent=r.seconds+' s';
+    $('foreground').textContent=Math.round(r.foreground*100)+'%';$('frameNote').textContent=r.note;
+    if(r.saved){$('status').textContent='Saved cloud '+r.saved_count;finalKey=null;mergedViewer.set([]);$('mergeNote').textContent='Capture updated. The merged result appears after Finish & align.';}
+    if(r.limit_reached)pause();
+    refreshScan(false);
+    if(finishPending)align();else scheduleFrame();
+    refreshButtons();
+   }else if(r.type==='error'){
+    inFlight=false;finishPending=false;pause();error(r.message);
+   }else if(r.type==='command_error')error(r.message);
+  };
+  socket.onclose=()=>{
+   if(ws!==socket)return;
+   wsReady=false;inFlight=false;pause();
+   if(finishPending){finishPending=false;align();}
+   reject(Error('Capture connection closed. Start capture again to reconnect.'));
+  };
+  socket.onerror=()=>reject(Error('Could not connect to the live processor.'));
+ });
+}
+async function start(){
+ error('');
+ try{
+  if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:$('camera').value?{exact:$('camera').value}:undefined,width:{ideal:640},height:{ideal:480}},audio:false});video.srcObject=stream;await video.play();drawRegion();}
+  if(!wsReady)await connectSocket();
+  capturing=true;$('status').textContent='Processing the live feed…';refreshButtons();scheduleFrame();
+ }catch(e){error(e.message);refreshButtons();}
+}
+async function align(){
+ pause();if(inFlight){finishPending=true;$('status').textContent='Finishing the current frame before alignment…';refreshButtons();return;}
+ finishPending=false;error('');
+ try{
+  scan=await api(base()+'/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dense:false,shared_camera:true,merge_live:true})});
+  finalKey=null;mergedViewer.set([]);$('downloads').replaceChildren();renderScan();
+ }catch(e){error(e.message);refreshButtons();}
+}
+function renderScan(){
+ $('saved').textContent=scan.photos.length+' / 200';$('processed').textContent=scan.processed_frames||0;
+ $('progress').value=scan.progress;$('buildStatus').textContent=scan.message;
+ $('aligned').textContent=scan.accepted_clouds??'–';$('mergedCount').textContent=scan.merged_points?.toLocaleString()??'–';
+ const labels={'merged.ply':'Download merged point cloud (PLY)','results.zip':'Download all results','sparse.ply':'Sparse alignment cloud (PLY)','alignment.json':'Cloud alignment / noise report','reconstruction.log':'Process log'};
+ $('downloads').replaceChildren();
+ for(const f of scan.outputs||[]){if(!labels[f])continue;const a=document.createElement('a');a.href=base()+'/files/'+f;a.download=f;a.textContent=labels[f];$('downloads').append(a);}
+ if(scan.outputs.includes('merged_preview.json')&&finalKey!==scan.id&&!building()){
+  const id=scan.id;finalKey=id;
+  api(base()+'/files/merged_preview.json').then(data=>{if(scan.id!==id)return;mergedViewer.set(data.points);$('mergeNote').textContent=data.total.toLocaleString()+' merged points. Preview is sampled; download PLY for the complete cloud.';}).catch(e=>{finalKey=null;error(e.message);});
+ }
+ refreshButtons();
+}
+async function refreshScan(repeat=true){
+ if(!scan)return;const id=scan.id;
+ try{const data=await api('/api/scans/'+id);if(scan.id===id){scan=data;renderScan();}}catch(e){error(e.message);}
+ if(repeat){clearTimeout(pollTimer);pollTimer=setTimeout(()=>refreshScan(),1500);}
+}
 async function newScan(){
-  if(uploading||active())return;
-  try{scan=await api('/api/scans',{method:'POST'});localStorage.setItem('photoScanId',scan.id);selected=null;selectedImage=null;clearModel();notify('');render();schedulePoll();}
-  catch(error){notify(error.message);}
+ pause();if(ws){const old=ws;ws=null;wsReady=false;old.close();}
+ if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;}
+ try{
+  scan=await api('/api/scans',{method:'POST'});localStorage.setItem('liveCloudScanId',scan.id);
+  region=[.1,.08,.9,.92];finalKey=null;localViewer.set([]);mergedViewer.set([]);$('depth').removeAttribute('src');$('mask').removeAttribute('src');
+  $('mergeNote').textContent='Appears after Finish & align.';error('');drawRegion();renderScan();
+ }catch(e){error(e.message);}
 }
-function schedulePoll(){clearTimeout(pollTimer);pollTimer=setTimeout(refresh,1200);}
-async function refresh(){
-  if(!scan)return;
-  if(uploading){schedulePoll();return;}
-  const id=scan.id;
-  try{const next=await api('/api/scans/'+id);if(!uploading&&scan.id===id){scan=next;render();}}
-  catch(error){notify(error.message);}
-  finally{schedulePoll();}
+async function pollModel(){
+ try{model=await api('/api/depth');$('engine').textContent='Depth: '+model.state+(model.state==='ready'?' ('+model.device+')':'')+' · COLMAP: '+(health?.colmap?'available':'missing');
+  if(model.state==='error')error(model.error);
+  refreshButtons();
+ }catch(e){error(e.message);}
+ clearTimeout(modelTimer);modelTimer=setTimeout(pollModel,2000);
 }
-let gallerySignature='';
-function render(){
-  const locked=uploading||active();
-  $('count').textContent=scan.photos.length+' / 200';
-  $('build').disabled=locked||scan.photos.length<3||!health?.colmap;
-  $('newScan').disabled=locked;$('mode').disabled=locked;$('sameCamera').disabled=locked;
-  $('drop').setAttribute('aria-disabled',String(locked));$('files').disabled=locked;
-  $('cancel').style.display=active()?'block':'none';
-  $('stage').textContent=scan.stage.replaceAll('_',' ');
-  $('message').textContent=scan.message;
-  $('progress').value=scan.progress;
-  $('stats').textContent=scan.registered_images?scan.registered_images+' / '+scan.photos.length+' photos aligned · '+scan.points.toLocaleString()+' sparse points':'Progress indicates stages, not estimated time.';
-  const signature=scan.id+':'+scan.photos.map(p=>p.id).join(',')+':'+locked+':'+selected;
-  if(signature!==gallerySignature){
-    gallerySignature=signature;
-    $('gallery').replaceChildren();
-    for(const photo of scan.photos){
-      const card=document.createElement('div');card.className='card'+(selected===photo.id?' selected':'');
-      const button=document.createElement('button');button.className='photo';button.title=photo.name;button.setAttribute('aria-label','Inspect '+photo.name);
-      const img=document.createElement('img');img.src=base()+'/thumbs/'+photo.id;img.alt=photo.name;img.loading='lazy';
-      const caption=document.createElement('span');caption.className='caption';caption.textContent=photo.name;
-      button.append(img,caption);button.onclick=()=>selectPhoto(photo);
-      const remove=document.createElement('button');remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label','Remove '+photo.name);remove.disabled=locked;
-      remove.onclick=async()=>{try{scan=await api(base()+'/photos/'+photo.id,{method:'DELETE'});if(selected===photo.id){selected=null;selectedImage=null;}clearModel();render();}catch(error){notify(error.message);}};
-      card.append(button,remove);
-      const badge=document.createElement('span');badge.className='badge';badge.textContent=photo.warnings.length?'⚠ '+photo.warnings.length+' quality note(s)':photo.features+' features';card.append(badge);
-      $('gallery').append(card);
-    }
-    if(!scan.photos.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='Your photo set will appear here.';$('gallery').append(empty);}
-  }
-  if(!selected&&scan.photos.length)selectPhoto(scan.photos[0]);
-  else if(!selected){$('photoCanvas').style.display='none';$('photoEmpty').style.display='block';$('photoEmpty').textContent='Select an uploaded photo to inspect its detail.';$('quality').replaceChildren();$('photoTitle').textContent='02 · Inspect a photo';}
-  $('downloads').replaceChildren();
-  const labels={'results.zip':'Download all results','sparse.ply':'Sparse PLY','dense.ply':'Dense PLY','mesh.ply':'Mesh PLY','mesh.obj':'Mesh OBJ','mesh.glb':'Mesh GLB','reconstruction.log':'Process log','report.json':'Build report'};
-  for(const file of scan.outputs||[]){if(!labels[file])continue;const a=document.createElement('a');a.href=base()+'/files/'+file;a.textContent=labels[file];a.download=file;$('downloads').append(a);}
-  if(scan.outputs.includes('preview.json')&&previewKey!==scan.id){
-    const id=scan.id;previewKey=id;
-    api(base()+'/files/preview.json').then(data=>{
-      if(scan.id!==id||!scan.outputs.includes('preview.json'))return;
-      normalizeCloud(data.points);$('previewNote').textContent='Sparse preview: '+points.length.toLocaleString()+' sampled points of '+data.total.toLocaleString()+'. Drag to rotate; scroll or pinch to zoom. Mesh outputs can be opened in Blender or MeshLab.';
-    }).catch(()=>{previewKey=null;});
-  }
-}
-async function selectPhoto(photo){
-  selected=photo.id;const id=scan.id;selectedImage=null;
-  $('photoCanvas').style.display='none';$('photoEmpty').style.display='block';$('photoEmpty').textContent='Loading photo…';
-  $('photoTitle').textContent=photo.name;
-  const quality=$('quality');quality.replaceChildren();
-  for(const text of [photo.width+' × '+photo.height,photo.features+' features','Sharpness '+photo.sharpness,'Brightness '+photo.brightness+'/255',...photo.warnings]){
-    const pill=document.createElement('span');pill.className='pill';pill.textContent=text;quality.append(pill);
-  }
-  const img=new Image();
-  img.onload=()=>{if(selected!==photo.id||scan.id!==id)return;selectedImage=img;drawPhoto(photo);};
-  img.onerror=()=>notify('Could not load the photo preview.');
-  img.src=base()+'/photos/'+photo.id+'/image';
-  render();
-}
-function drawPhoto(photo=scan?.photos.find(p=>p.id===selected)){
-  if(!photo||!selectedImage)return;
-  const canvas=$('photoCanvas'),c=canvas.getContext('2d');
-  const scale=Math.min(1,1200/selectedImage.naturalWidth);
-  canvas.width=Math.round(selectedImage.naturalWidth*scale);canvas.height=Math.round(selectedImage.naturalHeight*scale);
-  canvas.style.display='block';$('photoEmpty').style.display='none';
-  c.drawImage(selectedImage,0,0,canvas.width,canvas.height);
-  if(!$('overlays').checked)return;
-  c.fillStyle='#67e6ff';
-  for(const [x,y] of photo.feature_points){c.beginPath();c.arc(x*canvas.width,y*canvas.height,3,0,Math.PI*2);c.fill();}
-  if(photo.feature_box){const [x0,y0,x1,y1]=photo.feature_box;c.strokeStyle='#ffcb80';c.lineWidth=3;c.strokeRect(x0*canvas.width,y0*canvas.height,(x1-x0)*canvas.width,(y1-y0)*canvas.height);}
-}
-$('overlays').onchange=()=>drawPhoto();
-async function uploadFiles(files){
-  if(uploading||active()||!scan)return;
-  uploading=true;clearTimeout(pollTimer);clearModel();notify('');render();
-  const errors=[];let duplicates=0,added=0;
-  try{
-    for(let i=0;i<files.length;i++){
-      const file=files[i];$('uploadStatus').textContent='Uploading '+(i+1)+' / '+files.length+'…';
-      if(scan.photos.length>=200){errors.push('The 200-photo limit was reached.');break;}
-      if(file.size>20*1024*1024){errors.push(file.name+': larger than 20 MB.');continue;}
-      try{
-        const result=await api(base()+'/photos?name='+encodeURIComponent(file.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
-        if(result.duplicate)duplicates++;else{scan.photos.push(result.photo);added++;}
-      }catch(error){errors.push(file.name+': '+error.message);}
-    }
-    scan=await api(base());
-  }catch(error){errors.push(error.message);}
-  finally{
-    uploading=false;$('files').value='';$('uploadStatus').textContent=added+' added'+(duplicates?' · '+duplicates+' duplicates skipped':'');
-    notify(errors.slice(0,5).join(' ')+(errors.length>5?' More files failed; try smaller batches.':''));
-    render();schedulePoll();
-  }
-}
-$('files').onchange=e=>uploadFiles(Array.from(e.target.files));
-$('drop').onclick=()=>{if(!uploading&&!active())$('files').click();};
-$('drop').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('drop').click();}};
-for(const event of ['dragenter','dragover'])$('drop').addEventListener(event,e=>{e.preventDefault();if(!uploading&&!active())$('drop').classList.add('over');});
-for(const event of ['dragleave','drop'])$('drop').addEventListener(event,e=>{e.preventDefault();$('drop').classList.remove('over');});
-$('drop').addEventListener('drop',e=>uploadFiles(Array.from(e.dataTransfer.files)));
-$('newScan').onclick=newScan;
-$('build').onclick=async()=>{
-  if(uploading||active())return;
-  notify('');$('build').disabled=true;clearModel();
-  try{scan=await api(base()+'/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dense:$('mode').value==='mesh',shared_camera:$('sameCamera').checked})});render();schedulePoll();}
-  catch(error){notify(error.message);render();}
-};
-$('cancel').onclick=async()=>{try{scan=await api(base()+'/cancel',{method:'POST'});render();}catch(error){notify(error.message);}};
-function normalizeCloud(data){
-  if(!data.length){points=[];drawCloud();return;}
-  const axes=[0,1,2].map(axis=>data.map(p=>p[axis]).sort((a,b)=>a-b));
-  const centers=axes.map(a=>a[Math.floor(a.length/2)]);
-  const ranges=axes.map(a=>a[Math.floor((a.length-1)*.95)]-a[Math.floor((a.length-1)*.05)]);
-  const scale=Math.max(...ranges,1e-9);
-  points=data.map(p=>[(p[0]-centers[0])/scale,(p[1]-centers[1])/scale,(p[2]-centers[2])/scale,...p.slice(3)]);
-  yaw=.4;pitch=-.2;zoom=1;drawCloud();
-}
-function drawCloud(){
-  const canvas=$('viewer'),c=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
-  c.fillStyle='#0b1013';c.fillRect(0,0,w,h);
-  if(!points.length){c.fillStyle='#9badb1';c.font='18px system-ui';c.textAlign='center';c.fillText('Your 3D point cloud will appear here',w/2,h/2);c.textAlign='left';return;}
-  const sy=Math.sin(yaw),cy=Math.cos(yaw),sx=Math.sin(pitch),cx=Math.cos(pitch);
-  const transformed=points.map(([x,y,z,r,g,b])=>{const a=x*cy+z*sy,d=-x*sy+z*cy;return [a,y*cx-d*sx,y*sx+d*cx,r,g,b];}).sort((a,b)=>a[2]-b[2]);
-  for(const [x,y,z,r,g,b] of transformed){const k=Math.min(w,h)*.68*zoom;const px=w/2+x*k,py=h/2+y*k;if(px<0||px>w||py<0||py>h)continue;c.fillStyle='rgb('+r+','+g+','+b+')';c.fillRect(px,py,2.5,2.5);}
-}
-let pointers=new Map(),pinchDistance=null;
-$('viewer').onpointerdown=e=>{pointers.set(e.pointerId,[e.clientX,e.clientY]);$('viewer').setPointerCapture(e.pointerId);pinchDistance=null;};
-$('viewer').onpointermove=e=>{
-  if(!pointers.has(e.pointerId))return;
-  const old=pointers.get(e.pointerId);pointers.set(e.pointerId,[e.clientX,e.clientY]);
+$('loadModel').onclick=async()=>{error('');try{model=await api('/api/depth/load',{method:'POST'});$('status').textContent='Loading depth model; the first load downloads model weights.';refreshButtons();}catch(e){error(e.message);}};
+$('start').onclick=start;$('pause').onclick=pause;$('save').onclick=()=>{if(wsReady)ws.send('capture');};
+$('finish').onclick=align;$('new').onclick=newScan;
+$('cancel').onclick=async()=>{try{scan=await api(base()+'/cancel',{method:'POST'});renderScan();}catch(e){error(e.message);}};
+function viewer(id){
+ const canvas=$(id),c=canvas.getContext('2d');let points=[],yaw=.5,pitch=-.15,zoom=1;const pointers=new Map();let pinch=null;
+ function draw(){
+  const w=canvas.width,h=canvas.height;c.fillStyle='#090e10';c.fillRect(0,0,w,h);
+  if(!points.length){c.fillStyle='#9aafad';c.font='18px system-ui';c.textAlign='center';c.fillText('Waiting for point cloud',w/2,h/2);c.textAlign='left';return;}
+  const cy=Math.cos(yaw),sy=Math.sin(yaw),cx=Math.cos(pitch),sx=Math.sin(pitch);
+  const sorted=points.map(([x,y,z,r,g,b])=>{const a=x*cy+z*sy,d=-x*sy+z*cy;return [a,y*cx-d*sx,y*sx+d*cx,r,g,b];}).sort((a,b)=>a[2]-b[2]);
+  for(const [x,y,z,r,g,b] of sorted){const k=Math.min(w,h)*.7*zoom,px=w/2+x*k,py=h/2+y*k;if(px<0||px>w||py<0||py>h)continue;c.fillStyle='rgb('+r+','+g+','+b+')';c.fillRect(px,py,2.6,2.6);}
+ }
+ canvas.onpointerdown=e=>{pointers.set(e.pointerId,[e.clientX,e.clientY]);canvas.setPointerCapture(e.pointerId);pinch=null;};
+ canvas.onpointermove=e=>{if(!pointers.has(e.pointerId))return;const old=pointers.get(e.pointerId);pointers.set(e.pointerId,[e.clientX,e.clientY]);
   if(pointers.size===1){yaw+=(e.clientX-old[0])*.01;pitch+=(e.clientY-old[1])*.01;}
-  else{const [a,b]=Array.from(pointers.values());const d=Math.hypot(a[0]-b[0],a[1]-b[1]);if(pinchDistance)zoom=Math.min(8,Math.max(.15,zoom*d/pinchDistance));pinchDistance=d;}
-  drawCloud();
-};
-for(const event of ['pointerup','pointercancel'])$('viewer').addEventListener(event,e=>{pointers.delete(e.pointerId);pinchDistance=null;});
-$('viewer').addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(8,Math.max(.15,zoom*Math.exp(-e.deltaY*.001)));drawCloud();},{passive:false});
-$('resetView').onclick=()=>{yaw=.4;pitch=-.2;zoom=1;drawCloud();};
+  else{const [a,b]=Array.from(pointers.values()),distance=Math.hypot(a[0]-b[0],a[1]-b[1]);if(pinch)zoom=Math.min(8,Math.max(.15,zoom*distance/pinch));pinch=distance;}draw();};
+ for(const event of ['pointerup','pointercancel'])canvas.addEventListener(event,e=>{pointers.delete(e.pointerId);pinch=null;});
+ canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(8,Math.max(.15,zoom*Math.exp(-e.deltaY*.001)));draw();},{passive:false});
+ draw();
+ return {set(data){if(!data.length){points=[];draw();return;}const axes=[0,1,2].map(i=>data.map(p=>p[i]).sort((a,b)=>a-b));const center=axes.map(a=>a[Math.floor(a.length/2)]);const span=Math.max(...axes.map(a=>a[Math.floor((a.length-1)*.95)]-a[Math.floor((a.length-1)*.05)]),1e-6);
+ points=data.map(p=>[(p[0]-center[0])/span,(p[1]-center[1])/span,(p[2]-center[2])/span,...p.slice(3)]);draw();}};
+}
+const localViewer=viewer('localCloud'),mergedViewer=viewer('mergedCloud');
+window.addEventListener('beforeunload',()=>{capturing=false;ws?.close();stream?.getTracks().forEach(t=>t.stop());});
 (async()=>{
-  drawCloud();
-  try{
-    health=await api('/api/health');$('engine').textContent=health.colmap?'COLMAP available':'COLMAP not installed';
-    const saved=localStorage.getItem('photoScanId');
-    if(saved){try{scan=await api('/api/scans/'+encodeURIComponent(saved));}catch{}}
-    if(!scan)await newScan();else{render();schedulePoll();}
-    if(!health.colmap)notify('Photo upload works now. To build a model, install COLMAP and restart the server. See README.md.');
-  }catch(error){notify('Could not connect to the server: '+error.message);}
+ try{
+  health=await api('/api/health');
+  const devices=await navigator.mediaDevices.enumerateDevices();
+  for(const d of devices.filter(d=>d.kind==='videoinput'))$('camera').add(new Option(d.label||'Camera '+($('camera').options.length),d.deviceId));
+  const id=localStorage.getItem('liveCloudScanId');
+  if(id){try{scan=await api('/api/scans/'+encodeURIComponent(id));}catch{}}
+  if(scan){const s=scan.capture_settings;if(s){region=s.roi;$('background').checked=s.background;$('denoise').checked=s.denoise;}renderScan();}else await newScan();
+  drawRegion();pollModel();refreshScan();
+ }catch(e){error(e.message);}
 })();
 </script>
 </body>
