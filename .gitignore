@@ -1,0 +1,28 @@
+# Local scans and generated processing data
+/sample-data/
+/data/
+
+# Local model weights (keep model documentation trackable)
+/models/*
+!/models/README.md
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+/config.local.toml
+/certs/
+/certificates/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Python and frontend dependencies / build output
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+node_modules/
+dist/
