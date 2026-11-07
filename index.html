@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object scanner</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#16181b; --panel:#1f2226; --ink:#e8e3d8; --dim:#8d908f; --have:#5fb3a1; --need:#d99a3a; --bad:#d9604a; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font:16px/1.4 "IBM Plex Sans", system-ui, sans-serif;
+         display:grid; grid-template-columns: minmax(0,1fr) 300px; gap:20px; padding:20px; }
+  @media (max-width:860px) { body { grid-template-columns:1fr; } }
+  .stage { position:relative; }
+  main { min-width:0; display:flex; flex-direction:column; gap:16px; }
+  h2 { font-size:15px; margin:0 0 8px; font-weight:600; }
+  .processed { background:var(--panel); padding:14px; border-radius:6px; }
+  #processed { display:block; width:100%; max-width:none; background:#000; border-radius:4px; }
+  .toggles { display:flex; flex-wrap:wrap; gap:12px; font-size:14px; margin:10px 0; }
+  .legend { font-size:13px; color:var(--dim); margin:8px 0 0; }
+  video { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:6px; display:block; }
+  #banner { position:absolute; left:12px; right:12px; bottom:12px; padding:12px 16px; border-radius:6px; font-weight:600;
+            background:rgba(22,24,27,.88); border-left:6px solid var(--dim); }
+  #banner.ok { border-color:var(--have); } #banner.warn { border-color:var(--need); } #banner.bad { border-color:var(--bad); }
+  aside { background:var(--panel); border-radius:6px; padding:16px; display:flex; flex-direction:column; gap:14px; align-self:start; }
+  select, button { font:inherit; color:var(--ink); background:var(--bg); border:1px solid #3a3e44; border-radius:4px; padding:9px 10px; }
+  button { cursor:pointer; } button.go { background:var(--have); color:#0e1a17; border-color:var(--have); font-weight:600; }
+  button:focus-visible, select:focus-visible { outline:2px solid var(--need); outline-offset:2px; }
+  canvas { width:100%; max-width:240px; align-self:center; }
+  dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; color:var(--dim); } dd { margin:0; color:var(--ink); text-align:right; }
+  .row { display:flex; gap:8px; } .row button { flex:1; }
+  small { color:var(--dim); }
+</style>
+</head>
+<body>
+<main>
+<h2>Live camera</h2>
+<div class="stage">
+  <video id="v" autoplay playsinline muted></video>
+  <div id="banner">Connecting to scanner…</div>
+</div>
+<section class="processed">
+  <h2>Processed camera · latest analyzed frame</h2>
+  <canvas id="processed" width="960" height="540" aria-label="Camera frame with feature bounding box, detected points and feature motion"></canvas>
+  <div class="toggles">
+    <label><input id="showBox" type="checkbox" checked> Feature box</label>
+    <label><input id="showPoints" type="checkbox" checked> Features</label>
+    <label><input id="showTrails" type="checkbox" checked> Motion trails</label>
+  </div>
+  <p class="legend">Amber box: central 90% of detected features. Cyan dots: image features. Amber lines: candidate matches from the previous frame. Green dots: accepted pose inliers.</p>
+  <p class="legend">The box shows feature spread, not an identified object. Background features may be included.</p>
+</section>
+</main>
+<aside>
+  <select id="cam" aria-label="Camera"></select>
+  <canvas id="dome" width="240" height="240" aria-label="Coverage map"></canvas>
+  <small>Rings run from low angle (outer) to overhead (centre). Teal = captured, amber = still needed. The dot is you.</small>
+  <dl>
+    <dt>Saved photos</dt><dd id="kfs">0</dd><dt>Tracked views</dt><dd id="tracked">0</dd><dt>Live tracking</dt><dd id="tracking">Initializing</dd><dt>Map points</dt><dd id="pts">0</dd>
+    <dt>Features (need 40)</dt><dd id="feats">–</dd><dt>Brightness / 255</dt><dd id="brightness">–</dd><dt>Sharpness</dt><dd id="blur">–</dd><dt>Object in frame</dt><dd id="size">–</dd>
+  </dl>
+  <small id="capture_status">Move slowly around the object to save different views.</small>
+  <small id="quality"></small>
+  <button id="capture">Capture this view</button>
+  <div id="downloads"></div>
+  <div class="row"><button id="reset">Start over</button><button id="finish" class="go">Finish</button></div>
+</aside>
+
+<script>
+const $ = id => document.getElementById(id), v = $('v'), cam = $('cam'), banner = $('banner');
+const AZ = 12, RINGS = 3, ctx = $('dome').getContext('2d'), grab = document.createElement('canvas');
+let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
+let lastOverlay = null, analyzedFrame = document.createElement("canvas"), previousSavedCount = 0, savedFlash = false;
+let inFlight = false, command = null, timer = null, scanId = null, stopped = false;
+
+async function listCams() {
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(x => x.kind === 'videoinput');
+  const previous = cam.value;
+  cam.replaceChildren();
+  devices.forEach((d, i) => cam.add(new Option(d.label || 'Camera ' + (i + 1), d.deviceId)));
+  if (devices.some(d => d.deviceId === previous)) cam.value = previous;
+  return devices;
+}
+async function start(id) {
+  stream?.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({video: {
+    deviceId: id ? {exact: id} : undefined,
+    width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}
+  }, audio: false});
+  v.srcObject = stream;
+  await v.play();
+  await listCams();
+}
+cam.onchange = async () => {
+  try { await start(cam.value); requestCommand('reset'); }
+  catch (e) { banner.textContent = 'Camera unavailable: ' + e.message; banner.className = 'bad'; }
+};
+navigator.mediaDevices.addEventListener('devicechange', listCams);
+
+function requestCommand(value) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || command) return;
+  clearTimeout(timer);
+  command = value;
+  if (!inFlight) dispatchCommand();
+}
+function dispatchCommand() {
+  if (!command || inFlight || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(command);
+}
+function schedule() {
+  clearTimeout(timer);
+  if (!stopped && !command) timer = setTimeout(send, 150);
+}
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.onclose = () => { clearTimeout(timer); banner.textContent = 'Scanner disconnected. Reload the page to reconnect.'; banner.className = 'bad'; };
+  ws.onerror = () => { banner.textContent = 'Could not connect to the scanner.'; banner.className = 'bad'; };
+  ws.onmessage = e => {
+    const r = JSON.parse(e.data);
+    banner.textContent = r.msg; banner.className = r.lvl || '';
+    if (r.scan_id) scanId = r.scan_id;
+    if (r.bins) {
+      bins = r.bins; cur = r.cur; $('kfs').textContent = r.kfs; $('pts').textContent = r.pts;
+      $('tracked').textContent = r.tracked_views ?? 0; $('tracking').textContent = r.tracking || 'Initializing'; $('capture_status').textContent = r.capture || '';
+      $('feats').textContent = r.feats ?? '–'; $('brightness').textContent = r.brightness ?? '–'; $('quality').textContent = r.quality || '';
+      $('blur').textContent = r.blur ?? '–'; $('size').textContent = r.size ? Math.round(r.size * 100) + '%' : '–'; draw();
+    }
+    if (r.type === 'frame') {
+      // grab still contains the exact submitted frame; draw before sending another.
+      analyzedFrame.width = grab.width; analyzedFrame.height = grab.height;
+      analyzedFrame.getContext('2d').drawImage(grab, 0, 0);
+      lastOverlay = r.overlay || null;
+      savedFlash = r.kfs > previousSavedCount; previousSavedCount = r.kfs ?? previousSavedCount;
+      renderProcessed();
+      inFlight = false;
+      if (command) dispatchCommand(); else schedule();
+    } else if (r.type === 'ready') schedule();
+    else if (r.type === 'reset') {
+      command = null; stopped = false; $('downloads').replaceChildren();
+      lastOverlay = null; previousSavedCount = 0; savedFlash = false;
+      analyzedFrame.width = 0; renderProcessed(); schedule();
+    } else if (r.type === 'capture') {
+      command = null; stopped = false; schedule();
+    } else if (r.type === 'finish') {
+      command = null; stopped = !!r.done;
+      const box = $('downloads'); box.replaceChildren();
+      for (const file of r.files || []) {
+        const a = document.createElement('a'); a.href = '/scans/' + encodeURIComponent(scanId) + '/' + encodeURIComponent(file);
+        a.textContent = 'Download ' + file; a.style.display = 'block'; a.style.color = '#5fb3a1'; box.append(a);
+      }
+      if (!stopped) schedule();
+    }
+  };
+}
+function send() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || command || stopped) return;
+  if (!v.videoWidth || v.readyState < 2) { schedule(); return; }
+  inFlight = true;
+  grab.width = 1280; grab.height = Math.round(1280 * v.videoHeight / v.videoWidth);
+  grab.getContext('2d').drawImage(v, 0, 0, grab.width, grab.height);
+  grab.toBlob(b => {
+    if (b && ws.readyState === WebSocket.OPEN) ws.send(b);
+    else { inFlight = false; if (command) dispatchCommand(); else schedule(); }
+  }, 'image/jpeg', .9);
+}
+$('reset').onclick = () => requestCommand('reset');
+$('capture').onclick = () => requestCommand('capture');
+$('finish').onclick = () => requestCommand('finish');
+
+function renderProcessed() {
+  const canvas = $('processed'), c = canvas.getContext('2d');
+  canvas.width = analyzedFrame.width || 960; canvas.height = analyzedFrame.height || 540;
+  const w = canvas.width, h = canvas.height;
+  c.fillStyle = '#080b10'; c.fillRect(0, 0, w, h);
+  if (analyzedFrame.width) c.drawImage(analyzedFrame, 0, 0);
+  if (!lastOverlay) {
+    c.fillStyle = '#fff'; c.font = '20px system-ui'; c.fillText('Waiting for an analyzed frame…', 20, 35);
+    return;
+  }
+  const o = lastOverlay, sx = w / o.width, sy = h / o.height;
+  c.lineWidth = Math.max(1.5, w / 600);
+  if ($('showTrails').checked) {
+    c.strokeStyle = '#ffbd59';
+    for (const [x0, y0, x1, y1] of o.trails) {
+      c.beginPath(); c.moveTo(x0 * sx, y0 * sy); c.lineTo(x1 * sx, y1 * sy); c.stroke();
+    }
+  }
+  function dots(points, color, radius) {
+    c.fillStyle = color;
+    for (const [x, y] of points) { c.beginPath(); c.arc(x * sx, y * sy, radius, 0, Math.PI * 2); c.fill(); }
+  }
+  if ($('showPoints').checked) { dots(o.points, '#6de7ff', 2.6); dots(o.inliers, '#6dff91', 4); }
+  if ($('showBox').checked && o.box) {
+    const [x0, y0, x1, y1] = o.box;
+    c.strokeStyle = '#ffbd59'; c.strokeRect(x0 * sx, y0 * sy, (x1 - x0) * sx, (y1 - y0) * sy);
+    c.font = '17px system-ui';
+    const label = 'Feature region';
+    const y = Math.max(27, y0 * sy);
+    c.fillStyle = '#151b24'; c.fillRect(x0 * sx, y - 26, c.measureText(label).width + 16, 26);
+    c.fillStyle = '#ffbd59'; c.fillText(label, x0 * sx + 8, y - 7);
+  }
+  if (savedFlash) {
+    c.strokeStyle = '#6dff91'; c.lineWidth = 8; c.strokeRect(4, 4, w - 8, h - 8);
+  }
+  const label = savedFlash ? 'PHOTO SAVED · ' + previousSavedCount : 'Saved photos: ' + previousSavedCount;
+  c.font = '18px system-ui'; c.fillStyle = 'rgba(8,11,16,.88)';
+  c.fillRect(12, h - 46, c.measureText(label).width + 24, 34);
+  c.fillStyle = savedFlash ? '#6dff91' : '#fff'; c.fillText(label, 24, h - 23);
+}
+for (const id of ['showBox', 'showPoints', 'showTrails']) $(id).onchange = renderProcessed;
+
+/* ---- coverage dome ---- */
+function draw() {
+  const c = 120, R = 112, edges = [R, R * .62, R * .3, 0];   // outer = low elevation
+  ctx.clearRect(0, 0, 240, 240);
+  for (let ring = 0; ring < RINGS; ring++) for (let a = 0; a < AZ; a++) {
+    const a0 = -Math.PI / 2 + a * 2 * Math.PI / AZ, a1 = a0 + 2 * Math.PI / AZ;
+    ctx.beginPath(); ctx.arc(c, c, edges[ring], a0, a1); ctx.arc(c, c, edges[ring + 1], a1, a0, true); ctx.closePath();
+    ctx.fillStyle = bins[ring * AZ + a] ? '#5fb3a1' : 'rgba(217,154,58,.28)'; ctx.fill();
+    ctx.strokeStyle = '#1f2226'; ctx.lineWidth = 2; ctx.stroke();
+  }
+  if (cur) {
+    const ang = -Math.PI / 2 + (cur[0] + Math.PI) / 2 / Math.PI * 2 * Math.PI * 1, r = R * (1 - Math.min(Math.max(cur[1], 0), 90) / 90) * .95;
+    ctx.beginPath(); ctx.arc(c + r * Math.cos(ang), c + r * Math.sin(ang), 6, 0, 7); ctx.fillStyle = '#e8e3d8'; ctx.fill();
+  }
+}
+
+(async () => {
+  try {
+    (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach(t => t.stop());
+    const d = await listCams(), pick = d.find(x => /camo/i.test(x.label)) || d[0];
+    if (pick) { cam.value = pick.deviceId; await start(pick.deviceId); }
+  } catch (e) { banner.textContent = 'Camera unavailable: ' + e.message; banner.className = 'bad'; }
+  draw(); renderProcessed(); connect();
+})();
+</script>
+</body>
+</html>
