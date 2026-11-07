@@ -3,7 +3,7 @@ github-accounts.json
 holding
 scans
 .venv/
-
+.venv-photo/
 # Keep actual user scans local.
 /sample-data/
 
