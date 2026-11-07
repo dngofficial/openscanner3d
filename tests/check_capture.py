@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from fastapi.testclient import TestClient
 from backend.app import main as server
+from backend.app.config import Settings
 
 def jpeg(image):
     return cv2.imencode(".jpg", image)[1].tobytes()
@@ -18,7 +19,7 @@ def main():
         x, y = rng.integers([10, 10], [950, 530])
         color = int(rng.integers(130, 255))
         cv2.circle(target, (int(x), int(y)), 4, (color, color, color), -1)
-    with tempfile.TemporaryDirectory() as root, patch.object(server, "SCANS", Path(root)):
+    with tempfile.TemporaryDirectory() as root, patch.object(server, "SCANS", Path(root)), patch.object(server, "SETTINGS", Settings()):
         with patch.object(server.cv2, "findEssentialMat", return_value=(None, None)):
             scan = server.Scan()
             for i in range(12):
@@ -36,9 +37,12 @@ def main():
             assert len(list(scan.img.glob("*.jpg"))) == 12
             with patch.object(server.time, "monotonic", return_value=20):
                 assert scan.process(jpeg(image))["kfs"] == 12
-            with patch.object(server.shutil, "which", return_value=None):
-                assert "12 photos saved" in scan.finish()["msg"]
+            result = scan.finish()
+            assert result["done"] and not result["model_ready"], result
+            assert "Capture-only" in result["msg"], result
         with TestClient(server.app) as client:
+            assert client.get("/").status_code == 200
+            assert client.get("/api/health").json()["mode"] == "capture"
             with client.websocket_connect("/ws") as ws:
                 first = ws.receive_json()
                 ws.send_bytes(jpeg(target))

@@ -1,0 +1,14 @@
+# Copy to config.local.toml. Paths belong to the machine running the server.
+# Capture uses CPU OpenCV; it does not attempt dense reconstruction.
+mode = "capture"
+
+# On the partner's GPU laptop set mode = "reconstruct" after running doctor.
+# Use actual executable paths if the tools are not on PATH.
+# TOML single-quoted strings preserve Windows backslashes.
+colmap = 'colmap'
+blender = 'blender'
+
+# Initial bounded preset, not a guarantee of fitting in 8 GB VRAM.
+quality = "low"
+timeout_seconds = 1800
+max_photos = 100

@@ -6,7 +6,15 @@ Build a hackathon demo that turns phone photographs of a real object into a text
 
 **Demo flow:** capture/import photos → select object with AI → reconstruct → inspect model → download GLB.
 
-Assume a 24–48-hour event, one processing computer, and one active scan. Hardware and team size are not yet known. Live means camera preview and guidance; the final mesh is generated after capture, not continuously. This document supersedes the earlier production-scale implementation plan for hackathon scope.
+Assume a 24–48-hour event, one processing computer, and one active scan. The current machine split is recorded below; team size and remaining event time are not yet confirmed. Live means camera preview and guidance; the final mesh is generated after capture, not continuously. This document supersedes the earlier production-scale implementation plan for hackathon scope.
+
+### Current machine split (November 7, 2026)
+
+- Development laptop: integrated graphics usable; CPU capture and orchestration tests can run here.
+- Partner reconstruction laptop: Windows, RTX 3070 Ti Laptop with 8 GB VRAM, 32 GB RAM (user-reported; real reconstruction validation pending).
+- Initial phone route: Camo Camera on iPhone or Samsung Galaxy S26 Ultra feeds Camo Studio on the laptop; the laptop-local browser selects the Camo virtual webcam. Partner reports the initial iPhone setup works; Samsung physical-device acceptance remains pending.
+- Implemented foundation: capture/reconstruct modes, configured tool paths, constrained Python dependencies, Windows setup/launch scripts, doctor report, bounded reconstruction attempts, and photo-import fallback. See `docs/PARTNER_SETUP.md` and `docs/PHONE_SETUP.md`.
+- Phase 0's real GPU/textured-model gate moves to the partner machine. CPU tests or a synthetic mesh export do not satisfy it. Texturing, segmentation, Blender cleanup, and the 3D viewer remain outstanding.
 
 ## Success criteria
 

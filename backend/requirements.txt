@@ -1,5 +1,7 @@
+-c constraints.txt
 fastapi
 uvicorn[standard]
 numpy
 opencv-python
 trimesh
+Pillow

@@ -1,69 +1,82 @@
-# Live object scanner
+# Local object scanner
 
-## Repository guide
+Builds on the existing FastAPI + browser capture prototype. `PLAN.md` remains the scope authority; `docs/implementation_plan.md` is long-term background.
 
-`PLAN.md` defines the current hackathon scope; `AGENTS.md` defines engineering rules. The longer `docs/implementation_plan.md` is background, not the current backlog.
+## Windows quick start
 
-```text
-frontend/
-  index.html                 # Existing camera UI (plain HTML/JavaScript)
-backend/
-  app/main.py                # Existing FastAPI capture and reconstruction prototype
-  requirements.txt           # Runtime dependencies
-  requirements-dev.txt       # Runtime + capture-check dependencies
-scripts/
-  launch.ps1                 # Windows launcher using the root .venv
-tests/
-  check_capture.py           # Synthetic capture and WebSocket checks
-docs/
-  implementation_plan.md     # Long-term reference
-models/README.md              # Checkpoint policy; no weights bundled
-demo/README.md                # Real-data validation and fallback checklist
-PLAN.md
-AGENTS.md
+Install Python **3.11 x64**, clone/pull this repository, and run from its root:
+
+```powershell
+./scripts/setup.ps1
+./scripts/launch.ps1 -Mode capture
 ```
 
-Keep the prototype operational while validating reconstruction. React/Vite migration, segmentation, textured export, and the 3D viewer are future work; this organization does not implement them. The capture and COLMAP logic remain together in `backend/app/main.py` until the pipeline is validated.
+If the Python launcher is unavailable, pass your installed interpreter: `./scripts/setup.ps1 -Python 'C:\actual\path\python.exe'`. Setup creates `.venv`, installs the constrained dependencies, runs CPU tests, and saves `data/doctor.json`. It does not install COLMAP, Blender, CUDA, or model weights. The existing local config is never overwritten.
 
-Local `.venv/`, `sample-data/`, and `scans/` are ignored. Existing capture storage stays at repository-root `scans/` so this move does not relocate or invalidate saved files. The planned `data/scans/` layout can be introduced with the new storage layer.
+Open **http://localhost:8000 on the laptop**, then press **Start camera**. Camo is preferred when available; the camera selector still supports other webcams. Refresh cameras after connecting a device. If permission is denied, allow camera access for this site and retry. Photo import works without a camera.
 
-Capture a camera or virtual webcam in a browser on the same computer as the server. Frames are JPEG-encoded in the browser, sent over a WebSocket, and processed with OpenCV SIFT, two-view initialization, triangulation and PnP. Feedback is approximate. Selected original frames are saved as JPEG keyframes; Finish exports a sparse PLY and, when COLMAP succeeds, a dense mesh.
+The default `capture` mode uses CPU OpenCV and saves frames without running reconstruction. A working discrete GPU is not required for capture or the automated tests. `Finish` stops frame submission after at least 12 saved photos; this count is an input minimum, not a reconstruction-quality guarantee.
 
-## Start
+## Samsung and iPhone through Camo
 
-Install Python 3.10 or newer, then in this folder:
+Use the same route for either phone:
 
-    python -m venv .venv
-    # Windows PowerShell:
-    .venv\Scripts\Activate.ps1
-    # Linux/macOS:
-    source .venv/bin/activate
-    python -m pip install -r backend/requirements.txt
-    python -m backend.app.main
+**Phone Camo Camera → laptop Camo Studio → laptop browser selects Camo → local FastAPI server.**
 
-Run these commands from the repository root. Python 3.11 is the project target. On Windows, after creating the root `.venv`, `./scripts/launch.ps1` also starts the app without requiring activation. Dependency versions are inherited and currently unpinned; pin versions after a working environment and real reconstruction have been verified.
+See [the Samsung/Camo guide](docs/PHONE_SETUP.md). Camo documents Android support on Windows, but a physical Galaxy S26 Ultra capture has not been verified here. Keep the laptop server on localhost for this route. Opening localhost on a phone addresses the phone, not the laptop.
 
-Open http://localhost:8000, grant camera permission, and choose a camera. A phone acting as a virtual webcam (such as Camo) can be selected if its desktop software exposes it as a video input. This does not automatically capture a video playing in another browser tab. Start with the object visible, then move slowly sideways and orbit it, keeping it in view. Good lighting, a textured matte surface, and overlap between images help tracking. When you have at least 12 views, click Finish. Download links appear for files that were produced. Use Start over to begin another scan; previous scans remain in the scans directory.
+For photos already on disk, choose **Import photos**. JPEG, PNG, and WebP are accepted (HEIC is not). Limits: 100 files per selection, 25 MB per file, at most 16 megapixels and 8192 pixels per side. Original imported bytes are retained in `scans/<id>/originals/`; orientation-normalized working JPEGs (maximum long edge 1280) are stored in `images/`. Use one camera/lens and consistent resolution/orientation per scan. The server rejects changes in working dimensions instead of silently reusing incorrect calibration. Camo camera frames are stored as received browser JPEGs.
 
-The localhost server can access only cameras exposed to the browser on the same machine; a separate phone opening localhost would address the phone itself. It binds to 127.0.0.1 by default. Camera access needs browser permission.
+## Partner GPU build
 
-## Reconstruction and limits
+Target: **Windows, RTX 3070 Ti Laptop / 8 GB VRAM, 32 GB RAM**. The development machine currently has usable integrated graphics only.
 
-Install COLMAP separately and make its executable available on PATH before starting the server. Its automatic reconstruction and dense pipeline have platform, GPU and CUDA requirements depending on the installed build. If COLMAP is absent, the selected photos and sparse PLY remain available in scans/<session>/; Finish can be retried. Check colmap.log if the command fails. Dense reconstruction may take several minutes. A mesh is not guaranteed, and GLB color depends on the data actually produced by COLMAP; no texture creation is promised.
+Follow [PARTNER_SETUP.md](docs/PARTNER_SETUP.md). After the CPU setup works, configure the actual COLMAP executable in ignored `config.local.toml`, run doctor, and explicitly enable reconstruction. The existing COLMAP pipeline now has an executable/CLI check, one active reconstruction per server process, a 30-minute default timeout, logs, and a fresh workspace for every attempt. Initial quality is `low`; fitting the target GPU remains to be measured.
 
-This is an experimental structure-from-motion guide, not a calibrated or metric scanner. The focal length is guessed, the scene center comes from tracked points including possible background, and the assumed vertical axis comes from the initial camera orientation. Coverage, camera directions, object size and distance prompts are heuristics and can be misleading; scale is arbitrary. Reflective, plain or moving objects and weak parallax can cause tracking failure. For best results use a stable camera orientation, keep the object centered, avoid moving the object independently of the scene, and examine the outputs. Switching cameras starts a new scan because intrinsics and tracking change.
+```powershell
+.venv/Scripts/python.exe -m scripts.doctor --require-reconstruction --output data/partner-doctor.json
+./scripts/launch.ps1 -Mode reconstruct
+```
 
-The images contain the full camera view, including any background. Files are stored locally in scans/<session>/; remove old folders manually when no longer needed. Closing the page stops the live session, while already saved files stay on disk. Finish is synchronous within a scan and cannot be canceled from the page.
+Tool discovery is not proof of successful reconstruction. The current adapter produces an **experimental mesh**, not a verified textured or quad-topology model. UV texturing, Blender processing, SAM 2, and the 3D viewer remain unimplemented. Blender discovery in doctor is informational; the current export uses trimesh.
+
+## Storage and configuration
+
+- `config.example.toml`: documented defaults. Copy to ignored `config.local.toml` for machine-specific values; setup does this only if missing.
+- `scans/<id>/images/`: saved working JPEGs, usable for a partner-machine reconstruction test.
+- `scans/<id>/runs/<attempt>/`: separate COLMAP workspace for each reconstruction attempt.
+- `scans/<id>/colmap.log`: most recent reconstruction log.
+- `scans/<id>/mesh.glb` and `mesh.obj`: published only after successful mesh export validation.
+- `sample-data/`, `scans/`, `data/`, `.venv/`, `.tools/`, local config, keys, and weights are ignored.
+
+A failed rerun keeps the previous export on disk and does not advertise it as a new result. Closing the browser does not cancel an already-running subprocess; browser reconnection and cancellation are still pending. Stop the app before using the batch reconstruction command; concurrency control is within one server process, not across multiple app/CLI instances.
+
+## Repository layout
+
+```text
+backend/app/       FastAPI capture, configuration, image validation, reconstruction adapter
+backend/           Runtime/dev requirements and tested version constraints
+frontend/          Existing HTML interface and camera helpers (no bundler required)
+scripts/           Windows setup/launch, environment doctor, batch reconstruction
+tests/             CPU capture/backend tests and Node camera-helper tests
+docs/              Partner setup, phone setup, longer-term plan
+models/            Checkpoint documentation; weights remain local
+demo/              Real-data validation and fallback checklist
+```
 
 ## Verification
 
-From the repository root, with the virtual environment active:
-
 ```powershell
-python -m pip install -r backend/requirements-dev.txt
-python -m tests.check_capture
+.venv/Scripts/python.exe -m tests.check_capture
+.venv/Scripts/python.exe -m unittest discover -s tests -p 'test_*.py' -v
+node --test tests/camera.test.mjs
+.venv/Scripts/python.exe -m scripts.doctor --output data/doctor.json
 ```
 
-The development requirements include `httpx`, used by FastAPI's test client. The capture check uses synthetic images and mocks parts of tracking and executable discovery; it does not validate COLMAP, texturing, GPU support, or exported models. Real reconstruction and independent GLB inspection remain required by `PLAN.md`.
+Node is optional for the application and used only for camera-helper tests. CPU tests exercise imports, capture, malformed input, orientation rejection, configuration, exclusive execution, failed reruns, and actual subprocess timeout handling. They do not prove COLMAP, CUDA, textures, or physical camera compatibility. Dependency constraints were resolved on Windows x64 / Python 3.11.18. The current Starlette test client emits an httpx deprecation warning; the tests still pass.
 
-The repository reorganization was checked for path consistency, JavaScript syntax, and PowerShell syntax. Python execution and reconstruction have not been verified in this workspace because a usable Python environment and reconstruction tools have not yet been located.
+## Current limitations
+
+Tracking uses guessed intrinsics and can include background features; coverage and distance prompts are approximate, and scale is arbitrary. Keep the object stationary and avoid lens changes, Camo effects, auto-framing, or rotating the phone mid-scan. There is no guarantee of watertightness, quad topology, physical accuracy, or complete unseen surfaces.
+
+Direct phone-browser access over LAN requires trusted HTTPS and access controls; that deployment is not configured by these scripts. The supported initial route is Camo into a laptop-local browser. After initial dependency installation, our runtime has no remote font or cloud API dependency; verify Camo's operation with the chosen connection during the offline rehearsal.
