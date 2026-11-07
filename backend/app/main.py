@@ -2,16 +2,20 @@
 Pipeline: JPEG frames -> changed-view photo capture + independent SIFT/PnP live map.
 On Finish: keyframes go to COLMAP (dense + Poisson mesh) -> scan/mesh.obj + scan/mesh.glb
 """
-import asyncio, math, shutil, subprocess, uuid, logging, time
+import asyncio, math, uuid, logging, time
+from PIL import Image, UnidentifiedImageError
 from datetime import datetime
 from pathlib import Path
 import cv2, numpy as np, uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import FileResponse
+from .config import load_settings, resolve_tool
+from .reconstruction import reconstruct
+from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
-MAX_FRAME_BYTES = 5 * 1024 * 1024
+SETTINGS = load_settings()
 AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
 KF_DEG, MIN_BLUR = 6, 25             # new keyframe every 6 deg of orbit; Laplacian var floor
 bf = cv2.BFMatcher(cv2.NORM_L2)
@@ -34,6 +38,7 @@ class Scan:
     def reset(s):
         s.img.mkdir(parents=True, exist_ok=True)
         s.overlay = None; s.previous_features = None
+        s.import_next = False; s.frame_shape = None
         s.photos = []; s.last_photo = None; s.force_capture = False; s.capture_note = "Waiting for a usable frame"
         s.K = None; s.kfs = []; s.pts = np.zeros((0, 3)); s.ptd = np.zeros((0, 128), np.float32)
         s.bins = np.zeros((len(EL_EDGES) + 1, AZ), int); s.cur = None; s.size = 0
@@ -68,8 +73,8 @@ class Scan:
         now = time.monotonic()
         forced = s.force_capture
         s.force_capture = False
-        if len(s.photos) >= 500:
-            s.capture_note = "500-photo limit reached; finish this scan."
+        if len(s.photos) >= SETTINGS.max_photos:
+            s.capture_note = f"{SETTINGS.max_photos}-photo limit reached; finish this scan."
             return
         if s.last_photo is not None and not forced:
             if now - s.last_photo["time"] < .7:
@@ -129,7 +134,7 @@ class Scan:
         if a is None: return s.fb("Mapping started. Keep moving slowly sideways.", "ok")
         s.cur = [a[0], a[1]]
         done = (s.bins > 0).mean()
-        if done >= .8: return s.fb("Coverage complete. Press Finish.", "ok")
+        if done >= .8: return s.fb("Estimated tracking coverage reached. Review your photos before finishing.", "ok")
         cr, cc = s.bin_of(*a)
         best = min(((r, c) for r, c in np.argwhere(s.bins == 0)),
                    key=lambda rc: min(abs(rc[1] - cc), AZ - abs(rc[1] - cc)) + 2 * abs(rc[0] - cr))
@@ -155,11 +160,36 @@ class Scan:
                "Move back. The object is filling the frame." if s.size > .8 else None
 
     # ---- per frame --------------------------------------------------------
+    def decode(s, jpg):
+        full, shape = decode_jpeg(jpg, s.frame_shape)
+        s.frame_shape = shape
+        return full
+
+    def import_photo(s, jpg):
+        s.overlay = None
+        try:
+            normalized, suffix = normalize_photo(jpg)
+            s.decode(normalized)
+        except (ValueError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+            return s.fb(str(error), "bad", accepted=False)
+        if len(s.photos) >= SETTINGS.max_photos:
+            return s.fb("Photo limit reached; finish this scan.", "warn", accepted=False)
+        name = f"kf_{len(s.photos):04d}.jpg"
+        originals = s.out / "originals"
+        originals.mkdir(exist_ok=True)
+        (originals / f"kf_{len(s.photos):04d}{suffix}").write_bytes(jpg)
+        (s.img / name).write_bytes(normalized)
+        s.photos.append(name)
+        s.last_photo = None
+        s.capture_note = f"Imported photo {len(s.photos)}"
+        return s.fb(s.capture_note, "ok", accepted=True)
+
     def process(s, jpg):
         s.overlay = None
-        if len(jpg) > MAX_FRAME_BYTES: return s.fb("Frame too large; reduce the capture resolution.", "bad")
-        full = cv2.imdecode(np.frombuffer(jpg, np.uint8), 1)
-        if full is None: return s.fb("Invalid image received; waiting for the next frame.", "bad")
+        try:
+            full = s.decode(jpg)
+        except (ValueError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+            return s.fb(str(error), "bad")
         img = cv2.resize(full, (960, int(960 * full.shape[0] / full.shape[1])))
         g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY); H, W = g.shape
         if s.K is None: s.K = np.array([[.85 * W, 0, W / 2], [0, .85 * W, H / 2], [0, 0, 1]])
@@ -230,27 +260,21 @@ class Scan:
         with open(s.out / "sparse.ply", "w") as f:
             f.write(f"ply\nformat ascii 1.0\nelement vertex {len(s.pts)}\nproperty float x\nproperty float y\nproperty float z\nend_header\n")
             f.writelines(f"{x} {y} {z}\n" for x, y, z in s.pts)
-        exe = shutil.which("colmap")
-        if not exe: return dict(msg=f"{len(s.photos)} photos saved to the scan folder. Install COLMAP and press Finish again.", lvl="warn")
-        ws = s.out / "colmap"; ws.mkdir(exist_ok=True)
-        r = subprocess.run([exe, "automatic_reconstructor", "--workspace_path", str(ws), "--image_path", str(s.img),
-                            "--quality", "medium", "--single_camera", "1"], capture_output=True, text=True)
-        (s.out / "colmap.log").write_text(r.stdout + "\n" + r.stderr)
-        if r.returncode != 0:
-            return dict(msg="COLMAP failed. Check colmap.log in the scan folder.", lvl="bad")
-        ply = ws / "dense/0/meshed-poisson.ply"
-        if not ply.exists():
-            return dict(msg="COLMAP produced no dense mesh. Dense meshing needs an NVIDIA GPU (CUDA). See scan/colmap for the sparse model.", lvl="bad")
-        try:
-            import trimesh
-        except ImportError:
-            return dict(msg="Mesh created; install trimesh to export OBJ and GLB.", lvl="warn")
-        m = trimesh.load(ply); m.export(s.out / "mesh.obj"); m.export(s.out / "mesh.glb")
-        return dict(msg="Done. Import mesh.glb or mesh.obj into Blender.", lvl="ok", done=True)
+        return reconstruct(s.img, s.out, SETTINGS)
 
 
 @app.get("/")
 def index(): return FileResponse(BASE / "frontend" / "index.html")
+
+
+@app.get("/camera.mjs")
+def camera_module(): return FileResponse(BASE / "frontend" / "camera.mjs", media_type="text/javascript")
+
+
+@app.get("/api/health")
+def health():
+    return dict(status="ok", mode=SETTINGS.mode, colmap_found=bool(resolve_tool(SETTINGS.colmap)),
+                textured_export=False, segmentation=False, reconstruction_verified=False)
 
 
 @app.get("/scans/{scan_id}/{filename}")
@@ -271,14 +295,17 @@ async def ws_(ws: WebSocket):
     if origin and origin not in (f"http://{host}", f"https://{host}"):
         await ws.close(code=1008); return
     await ws.accept(); s = Scan()
-    await ws.send_json({"type": "ready", "scan_id": s.id, "msg": "Scanner ready. Start the camera."})
+    await ws.send_json({"type": "ready", "scan_id": s.id, "mode": SETTINGS.mode,
+                        "msg": f"Scanner ready ({SETTINGS.mode} mode). Start the camera."})
     try:
         while True:
             m = await ws.receive()
             if m["type"] == "websocket.disconnect": break
             if m.get("bytes") is not None:
                 try:
-                    result = await asyncio.to_thread(s.process, m["bytes"])
+                    processor = s.import_photo if s.import_next else s.process
+                    s.import_next = False
+                    result = await asyncio.to_thread(processor, m["bytes"])
                 except (cv2.error, ValueError, FloatingPointError):
                     logging.exception("Frame processing failed")
                     result = s.fb("Could not process this frame; try moving slowly.", "bad")
@@ -290,19 +317,28 @@ async def ws_(ws: WebSocket):
             elif m.get("text") == "capture":
                 s.force_capture = True
                 await ws.send_json({"type": "capture", **s.fb("Manual capture requested; waiting for a usable frame.", "ok")})
+            elif m.get("text") == "import":
+                s.import_next = True
+                await ws.send_json({"type": "import", "msg": "Importing photo…"})
+            elif m.get("text") == "cancel_import":
+                s.import_next = False
             elif m.get("text") == "finish":
-                await ws.send_json({"type": "busy", "msg": "Building reconstruction. This can take several minutes.", "lvl": "ok"})
+                message = "Saving capture." if SETTINGS.mode == "capture" else "Building experimental reconstruction. This can take several minutes."
+                await ws.send_json({"type": "busy", "msg": message, "lvl": "ok"})
                 try:
                     result = await asyncio.to_thread(s.finish)
                 except Exception:
                     logging.exception("Reconstruction failed")
                     result = {"msg": "Reconstruction failed; check the server console.", "lvl": "bad"}
+                files = ["sparse.ply", "colmap.log"]
+                if result.get("model_ready"):
+                    files.extend(["mesh.obj", "mesh.glb"])
                 result.update(type="finish", scan_id=s.id,
-                              files=[f for f in ("sparse.ply", "mesh.obj", "mesh.glb", "colmap.log") if (s.out / f).is_file()])
+                              files=[f for f in files if (s.out / f).is_file()])
                 await ws.send_json(result)
     except WebSocketDisconnect:
         pass
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000, ws_max_size=MAX_UPLOAD_BYTES, ws_max_queue=2)

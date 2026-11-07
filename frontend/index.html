@@ -51,7 +51,13 @@
 </section>
 </main>
 <aside>
+  <small id="mode">Connecting…</small>
+  <small>iPhone or Samsung via Camo: open Camo Studio on this laptop, connect your phone, then select Camo below.</small>
   <select id="cam" aria-label="Camera"></select>
+  <div class="row"><button id="startCamera">Start camera</button><button id="refreshCameras">Refresh cameras</button></div>
+  <small id="cameraStatus" role="status">Camera is stopped.</small>
+  <label>Import photos <input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+  <small id="importStatus" role="status"></small>
   <canvas id="dome" width="240" height="240" aria-label="Coverage map"></canvas>
   <small>Rings run from low angle (outer) to overhead (centre). Teal = captured, amber = still needed. The dot is you.</small>
   <dl>
@@ -65,14 +71,17 @@
   <div class="row"><button id="reset">Start over</button><button id="finish" class="go">Finish</button></div>
 </aside>
 
-<script>
+<script type="module">
+import { preferredCamera, cameraConstraints, frameSize, cameraError } from '/camera.mjs';
 const $ = id => document.getElementById(id), v = $('v'), cam = $('cam'), banner = $('banner');
 const AZ = 12, RINGS = 3, ctx = $('dome').getContext('2d'), grab = document.createElement('canvas');
 let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
 let lastOverlay = null, analyzedFrame = document.createElement("canvas"), previousSavedCount = 0, savedFlash = false;
 let inFlight = false, command = null, timer = null, scanId = null, stopped = false;
+let cameraStarting = false, importReady = false, importQueue = [], importFailures = 0;
 
 async function listCams() {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
   const devices = (await navigator.mediaDevices.enumerateDevices()).filter(x => x.kind === 'videoinput');
   const previous = cam.value;
   cam.replaceChildren();
@@ -82,21 +91,74 @@ async function listCams() {
 }
 async function start(id) {
   stream?.getTracks().forEach(t => t.stop());
-  stream = await navigator.mediaDevices.getUserMedia({video: {
-    deviceId: id ? {exact: id} : undefined,
-    width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}
-  }, audio: false});
+  stream = null;
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(id));
+  } catch (error) {
+    if (error.name !== 'OverconstrainedError') throw error;
+    stream = await navigator.mediaDevices.getUserMedia({audio: false, video: id ? {deviceId: {exact: id}} : true});
+  }
   v.srcObject = stream;
   await v.play();
   await listCams();
+  const track = stream.getVideoTracks()[0];
+  if (track.getSettings().deviceId) cam.value = track.getSettings().deviceId;
+  $('cameraStatus').textContent = track.label + ' · ' + v.videoWidth + ' × ' + v.videoHeight;
+  track.addEventListener('ended', () => {
+    stream = null;
+    $('cameraStatus').textContent = 'Camera disconnected. Reconnect Camo, then press Start camera.';
+  });
 }
-cam.onchange = async () => {
-  try { await start(cam.value); requestCommand('reset'); }
-  catch (e) { banner.textContent = 'Camera unavailable: ' + e.message; banner.className = 'bad'; }
+async function startCamera(manualId) {
+  if (cameraStarting || inFlight || command || importQueue.length) {
+    $('cameraStatus').textContent = 'Wait for the current frame or operation, then try again.';
+    return;
+  }
+  cameraStarting = true;
+  clearTimeout(timer);
+  try {
+    const devices = await listCams();
+    const chosen = manualId || preferredCamera(devices)?.deviceId;
+    await start(chosen);
+    // Device labels can be hidden until permission has been granted.
+    if (!manualId && !chosen) {
+      const camo = preferredCamera(await listCams());
+      if (camo && stream.getVideoTracks()[0].getSettings().deviceId !== camo.deviceId) await start(camo.deviceId);
+    }
+    if (previousSavedCount > 0) {
+      requestCommand('reset'); // Keep different camera intrinsics in separate scans.
+      $('cameraStatus').textContent += ' · New scan started; previous photos remain saved.';
+    } else { stopped = false; schedule(); }
+  } catch (error) {
+    stream?.getTracks().forEach(track => track.stop()); stream = null;
+    $('cameraStatus').textContent = cameraError(error, window.isSecureContext);
+  } finally { cameraStarting = false; }
+}
+cam.onchange = () => startCamera(cam.value);
+$('startCamera').onclick = () => startCamera();
+$('refreshCameras').onclick = () => listCams().catch(error => { $('cameraStatus').textContent = error.message; });
+navigator.mediaDevices?.addEventListener?.('devicechange', () => listCams().catch(() => {}));
+window.addEventListener('pagehide', () => { stream?.getTracks().forEach(track => track.stop()); ws?.close(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearTimeout(timer);
+  else if (!inFlight) schedule();
+});
+$('photos').onchange = event => {
+  if (inFlight || command || importQueue.length) { $('importStatus').textContent = 'Wait for the current operation, then select photos again.'; return; }
+  const files = [...event.target.files];
+  if (!files.length) return;
+  if (files.length > 100 || files.some(file => file.size > 25 * 1024 * 1024)) {
+    $('importStatus').textContent = 'Choose at most 100 photos, each under 25 MB.'; return;
+  }
+  stream?.getTracks().forEach(track => track.stop()); stream = null;
+  importQueue = files; importFailures = 0; stopped = false;
+  $('importStatus').textContent = 'Importing photos. Keep this page open.';
+  event.target.value = ''; schedule();
 };
-navigator.mediaDevices.addEventListener('devicechange', listCams);
 
 function requestCommand(value) {
+  if (value !== 'import' && (importQueue.length || importReady)) return;
   if (!ws || ws.readyState !== WebSocket.OPEN || command) return;
   clearTimeout(timer);
   command = value;
@@ -108,7 +170,7 @@ function dispatchCommand() {
 }
 function schedule() {
   clearTimeout(timer);
-  if (!stopped && !command) timer = setTimeout(send, 150);
+  if (!stopped && !command && !document.hidden) timer = setTimeout(send, 150);
 }
 function connect() {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
@@ -118,6 +180,7 @@ function connect() {
     const r = JSON.parse(e.data);
     banner.textContent = r.msg; banner.className = r.lvl || '';
     if (r.scan_id) scanId = r.scan_id;
+    if (r.mode) $('mode').textContent = r.mode === 'capture' ? 'Capture only · photos saved locally' : 'Reconstruction enabled · experimental mesh export';
     if (r.bins) {
       bins = r.bins; cur = r.cur; $('kfs').textContent = r.kfs; $('pts').textContent = r.pts;
       $('tracked').textContent = r.tracked_views ?? 0; $('tracking').textContent = r.tracking || 'Initializing'; $('capture_status').textContent = r.capture || '';
@@ -132,8 +195,14 @@ function connect() {
       savedFlash = r.kfs > previousSavedCount; previousSavedCount = r.kfs ?? previousSavedCount;
       renderProcessed();
       inFlight = false;
+      if (importReady) {
+        if (!r.accepted) importFailures++;
+        importReady = false;
+        $('importStatus').textContent = importQueue.length ? importQueue.length + ' photos remaining.' : 'Import finished. ' + importFailures + ' failed. Press Finish when ready.';
+      }
       if (command) dispatchCommand(); else schedule();
     } else if (r.type === 'ready') schedule();
+    else if (r.type === 'import') { command = null; importReady = true; schedule(); }
     else if (r.type === 'reset') {
       command = null; stopped = false; $('downloads').replaceChildren();
       lastOverlay = null; previousSavedCount = 0; savedFlash = false;
@@ -151,11 +220,30 @@ function connect() {
     }
   };
 }
-function send() {
-  if (!ws || ws.readyState !== WebSocket.OPEN || command || stopped) return;
+async function send() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || command || stopped || cameraStarting || inFlight) return;
+  if (importQueue.length) {
+    if (!importReady) { requestCommand('import'); return; }
+    const file = importQueue.shift();
+    inFlight = true;
+    try {
+      const bitmap = await createImageBitmap(file);
+      [grab.width, grab.height] = frameSize(bitmap.width, bitmap.height);
+      grab.getContext('2d').drawImage(bitmap, 0, 0, grab.width, grab.height); bitmap.close();
+      if (ws.readyState !== WebSocket.OPEN) throw new Error('Connection lost');
+      ws.send(file); // Preserve original bytes; the server stores a normalized working JPEG separately.
+    } catch (error) {
+      importFailures++; inFlight = false;
+      $('importStatus').textContent = 'Could not import ' + file.name + ': ' + error.message;
+      if (!importQueue.length) { if (ws.readyState === WebSocket.OPEN) ws.send('cancel_import'); importReady = false; }
+      schedule();
+    }
+    return;
+  }
+  if (!stream) return;
   if (!v.videoWidth || v.readyState < 2) { schedule(); return; }
   inFlight = true;
-  grab.width = 1280; grab.height = Math.round(1280 * v.videoHeight / v.videoWidth);
+  [grab.width, grab.height] = frameSize(v.videoWidth, v.videoHeight);
   grab.getContext('2d').drawImage(v, 0, 0, grab.width, grab.height);
   grab.toBlob(b => {
     if (b && ws.readyState === WebSocket.OPEN) ws.send(b);
@@ -224,14 +312,8 @@ function draw() {
   }
 }
 
-(async () => {
-  try {
-    (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach(t => t.stop());
-    const d = await listCams(), pick = d.find(x => /camo/i.test(x.label)) || d[0];
-    if (pick) { cam.value = pick.deviceId; await start(pick.deviceId); }
-  } catch (e) { banner.textContent = 'Camera unavailable: ' + e.message; banner.className = 'bad'; }
-  draw(); renderProcessed(); connect();
-})();
+if (!navigator.mediaDevices?.getUserMedia) $('cameraStatus').textContent = cameraError(new Error('Camera API unavailable'), window.isSecureContext);
+draw(); renderProcessed(); connect();
 </script>
 </body>
 </html>
