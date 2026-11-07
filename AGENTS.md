@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Build the hackathon application described in `PLAN.md`: phone photos become a locally reconstructed, textured, exportable 3D object, with a meaningful pretrained ML segmentation feature.
+Build the application described in `PLAN.md`: phone photos become a locally reconstructed, textured, exportable 3D object, with a meaningful pretrained ML segmentation feature.
 
 This file applies to this repository and its subdirectories. Follow explicit user instructions first. Use `PLAN.md` for scope and acceptance criteria. The earlier long-term `implementation_plan.md`, if present, is background; do not reintroduce its production features into this hackathon.
 
