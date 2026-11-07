@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Photo → 3D · Object reconstruction</title>
+<style>
+:root{color-scheme:dark;--bg:#101417;--panel:#192126;--line:#324249;--text:#edf2eb;--muted:#a2b3b7;--accent:#a8e3ad;--warn:#ffcb80}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
+header{padding:28px 32px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:20px}
+h1{font-size:27px;letter-spacing:-.8px;margin:0}h2{font-size:17px;margin:0 0 12px}p{margin:8px 0}small,.muted{color:var(--muted)}
+.tag{text-transform:uppercase;letter-spacing:2px;font-size:11px;color:var(--accent);margin-bottom:7px}
+main{max-width:1500px;margin:auto;padding:24px 32px;display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:22px}
+.workspace{min-width:0;display:flex;flex-direction:column;gap:20px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.actions{display:flex;gap:8px;flex-wrap:wrap}
+button,.button,select{font:inherit;border:1px solid var(--line);border-radius:7px;padding:10px 14px;color:var(--text);background:#233039;cursor:pointer;text-decoration:none}
+button.primary{background:var(--accent);color:#142719;border-color:var(--accent);font-weight:650}button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,.drop:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.drop{border:1px dashed #688379;border-radius:9px;padding:25px;text-align:center;background:#15231f;cursor:pointer}
+.drop.over{background:#244a35;border-color:var(--accent)}.drop strong{display:block;font-size:19px;margin:0 0 5px}.drop[aria-disabled=true]{opacity:.5;cursor:wait}
+#gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:18px}
+.card{position:relative;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#11191d}
+.card.selected{border:2px solid var(--accent)}.card button.photo{display:block;padding:0;width:100%;border:0;background:transparent;text-align:left}
+.card img{width:100%;height:100px;object-fit:cover;display:block}.caption{display:block;padding:7px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.badge{font-size:11px;color:var(--warn);padding:0 8px 7px;display:block}.remove{position:absolute;right:4px;top:4px;border-radius:5px;padding:0 7px;background:#141b20e8;font-size:20px}
+.empty{padding:25px 0;text-align:center;color:var(--muted)}.preview-wrap{min-height:230px;display:grid;place-items:center;overflow:hidden;background:#0b1013;border-radius:8px;position:relative}
+canvas{display:block;width:100%;height:auto;max-height:620px;object-fit:contain}#photoCanvas{display:none}
+#viewer{height:360px;touch-action:none;cursor:grab}#viewer:active{cursor:grabbing}
+#photoTitle{overflow-wrap:anywhere}.quality{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}.pill{background:#24343a;border-radius:30px;padding:4px 10px;font-size:12px}
+.sidebar{display:flex;flex-direction:column;gap:18px;align-self:start}.instructions{margin:0;padding-left:21px;color:var(--muted)}.instructions li{margin:8px 0}
+label.option{display:flex;gap:8px;align-items:flex-start;margin:12px 0}input[type=checkbox]{accent-color:var(--accent);margin-top:5px}
+select{width:100%;margin:7px 0}.full{width:100%}progress{width:100%;height:10px;accent-color:var(--accent);margin-top:12px}
+#message{overflow-wrap:anywhere}.stage{color:var(--accent);font-size:12px;text-transform:uppercase;letter-spacing:1px}
+#notice{color:var(--warn);min-height:23px;margin:12px 0 0;overflow-wrap:anywhere}
+#downloads{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}#downloads a{font-size:13px;color:var(--accent);border:1px solid var(--line);border-radius:6px;padding:7px 10px;text-decoration:none}
+hr{border:0;border-top:1px solid var(--line);margin:18px 0}.status{border:1px solid var(--line);border-radius:20px;padding:6px 12px;font-size:12px;white-space:nowrap}
+@media(max-width:950px){main{grid-template-columns:1fr}.sidebar{display:grid;grid-template-columns:1fr 1fr}}
+@media(max-width:600px){header{padding:20px;align-items:flex-start;flex-direction:column}main{padding:16px;gap:16px}.sidebar{display:flex}h1{font-size:24px}.panel{padding:16px}#viewer{height:280px}}
+</style>
+</head>
+<body>
+<header>
+  <div><div class="tag">Object reconstruction</div><h1>Your photos. One 3D model.</h1><p class="muted">Add overlapping views, inspect the images, then build the geometry.</p></div>
+  <div id="engine" class="status">Checking reconstruction engine…</div>
+</header>
+<main>
+<div class="workspace">
+<section class="panel">
+  <div class="row"><h2>01 · Add your photos <span id="count" class="muted">0 / 200</span></h2><button id="newScan">New photo set</button></div>
+  <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+  <div id="drop" class="drop" role="button" tabindex="0" aria-label="Choose photos to upload" aria-disabled="false">
+    <strong>Drop photos here, or click to choose</strong>
+    <span class="muted">JPEG, PNG or WebP · up to 200 photos · 20 MB each</span>
+  </div>
+  <div class="row" style="margin-top:12px"><small>Start with 20–80 sharp photos around a stationary object.</small><span id="uploadStatus" class="muted" role="status"></span></div>
+  <p id="notice" role="alert"></p>
+  <div id="gallery"><div class="empty">Your photo set will appear here.</div></div>
+</section>
+<section class="panel">
+  <div class="row"><h2 id="photoTitle">02 · Inspect a photo</h2><label><input id="overlays" type="checkbox" checked> Show feature indicators</label></div>
+  <div class="preview-wrap"><p id="photoEmpty" class="muted">Select an uploaded photo to inspect its detail.</p><canvas id="photoCanvas" aria-label="Selected photo and detected feature region"></canvas></div>
+  <div id="quality" class="quality"></div>
+  <p class="muted"><small>Cyan dots show image detail; the amber box shows feature spread. These are quality guides, not object detection. Warnings do not block reconstruction.</small></p>
+</section>
+<section class="panel">
+  <div class="row"><h2>03 · Reconstructed point cloud</h2><button id="resetView">Reset view</button></div>
+  <canvas id="viewer" width="1000" height="440" aria-label="Interactive sparse point cloud preview"></canvas>
+  <small id="previewNote">A preview appears after camera alignment. Drag to rotate; scroll or pinch to zoom. Mesh files are available below after a successful mesh build.</small>
+  <div id="downloads"></div>
+</section>
+</div>
+<aside class="sidebar">
+<section class="panel">
+  <h2>Build settings</h2>
+  <label for="mode" class="muted">Output</label>
+  <select id="mode"><option value="mesh">Mesh + point cloud · NVIDIA / CUDA</option><option value="sparse">Sparse point cloud · CPU</option></select>
+  <p class="muted"><small>CPU mode creates sparse geometry. Mesh mode adds dense depth estimation and surface reconstruction; it needs a compatible CUDA-enabled COLMAP installation.</small></p>
+  <label class="option"><input id="sameCamera" type="checkbox"><span>Same camera and fixed zoom<br><small>Enable only if all photos use the same lens, zoom and image dimensions.</small></span></label>
+  <button id="build" class="primary full" disabled>Build 3D model</button>
+  <button id="cancel" class="full" style="display:none;margin-top:8px">Cancel reconstruction</button>
+  <hr>
+  <div id="stage" class="stage">Waiting for photos</div>
+  <progress id="progress" max="100" value="0" aria-label="Reconstruction stage progress"></progress>
+  <p id="message" role="status">Add photos to begin.</p>
+  <small id="stats">Progress indicates pipeline stages, not estimated time.</small>
+</section>
+<section class="panel">
+  <h2>Capture a useful photo set</h2>
+  <ol class="instructions">
+    <li>Keep the object still and move the camera around it. Aim for substantial overlap between neighboring views.</li>
+    <li>Take a full circle at mid height, then another from a higher angle. Include close detail without changing zoom.</li>
+    <li>Use soft, consistent light and a matte object with visible surface detail. Avoid motion blur, glare and blank surfaces.</li>
+    <li>Keep the object centered. The reconstructed scene can include the background; this app does not isolate the object automatically.</li>
+  </ol>
+  <p class="muted"><small>A few unrelated angles will rarely align. Uploaded photos stay on this computer in the scan folder.</small></p>
+</section>
+</aside>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let scan=null, health=null, uploading=false, selected=null, selectedImage=null, pollTimer=null, previewKey=null, points=[];
+let yaw=.4,pitch=-.2,zoom=1;
+const active=()=>scan&&['queued','running'].includes(scan.state);
+function notify(msg){$('notice').textContent=msg;}
+async function api(path,options={}){
+  const response=await fetch(path,options);
+  if(!response.ok){let error;try{error=await response.json();}catch{}throw new Error(typeof error?.detail==='string'?error.detail:'Request failed ('+response.status+').');}
+  return response.json();
+}
+function base(){return '/api/scans/'+scan.id;}
+function clearModel(){points=[];previewKey=null;drawCloud();$('previewNote').textContent='A preview appears after camera alignment. Drag to rotate; scroll or pinch to zoom.';}
+async function newScan(){
+  if(uploading||active())return;
+  try{scan=await api('/api/scans',{method:'POST'});localStorage.setItem('photoScanId',scan.id);selected=null;selectedImage=null;clearModel();notify('');render();schedulePoll();}
+  catch(error){notify(error.message);}
+}
+function schedulePoll(){clearTimeout(pollTimer);pollTimer=setTimeout(refresh,1200);}
+async function refresh(){
+  if(!scan)return;
+  if(uploading){schedulePoll();return;}
+  const id=scan.id;
+  try{const next=await api('/api/scans/'+id);if(!uploading&&scan.id===id){scan=next;render();}}
+  catch(error){notify(error.message);}
+  finally{schedulePoll();}
+}
+let gallerySignature='';
+function render(){
+  const locked=uploading||active();
+  $('count').textContent=scan.photos.length+' / 200';
+  $('build').disabled=locked||scan.photos.length<3||!health?.colmap;
+  $('newScan').disabled=locked;$('mode').disabled=locked;$('sameCamera').disabled=locked;
+  $('drop').setAttribute('aria-disabled',String(locked));$('files').disabled=locked;
+  $('cancel').style.display=active()?'block':'none';
+  $('stage').textContent=scan.stage.replaceAll('_',' ');
+  $('message').textContent=scan.message;
+  $('progress').value=scan.progress;
+  $('stats').textContent=scan.registered_images?scan.registered_images+' / '+scan.photos.length+' photos aligned · '+scan.points.toLocaleString()+' sparse points':'Progress indicates stages, not estimated time.';
+  const signature=scan.id+':'+scan.photos.map(p=>p.id).join(',')+':'+locked+':'+selected;
+  if(signature!==gallerySignature){
+    gallerySignature=signature;
+    $('gallery').replaceChildren();
+    for(const photo of scan.photos){
+      const card=document.createElement('div');card.className='card'+(selected===photo.id?' selected':'');
+      const button=document.createElement('button');button.className='photo';button.title=photo.name;button.setAttribute('aria-label','Inspect '+photo.name);
+      const img=document.createElement('img');img.src=base()+'/thumbs/'+photo.id;img.alt=photo.name;img.loading='lazy';
+      const caption=document.createElement('span');caption.className='caption';caption.textContent=photo.name;
+      button.append(img,caption);button.onclick=()=>selectPhoto(photo);
+      const remove=document.createElement('button');remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label','Remove '+photo.name);remove.disabled=locked;
+      remove.onclick=async()=>{try{scan=await api(base()+'/photos/'+photo.id,{method:'DELETE'});if(selected===photo.id){selected=null;selectedImage=null;}clearModel();render();}catch(error){notify(error.message);}};
+      card.append(button,remove);
+      const badge=document.createElement('span');badge.className='badge';badge.textContent=photo.warnings.length?'⚠ '+photo.warnings.length+' quality note(s)':photo.features+' features';card.append(badge);
+      $('gallery').append(card);
+    }
+    if(!scan.photos.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='Your photo set will appear here.';$('gallery').append(empty);}
+  }
+  if(!selected&&scan.photos.length)selectPhoto(scan.photos[0]);
+  else if(!selected){$('photoCanvas').style.display='none';$('photoEmpty').style.display='block';$('photoEmpty').textContent='Select an uploaded photo to inspect its detail.';$('quality').replaceChildren();$('photoTitle').textContent='02 · Inspect a photo';}
+  $('downloads').replaceChildren();
+  const labels={'results.zip':'Download all results','sparse.ply':'Sparse PLY','dense.ply':'Dense PLY','mesh.ply':'Mesh PLY','mesh.obj':'Mesh OBJ','mesh.glb':'Mesh GLB','reconstruction.log':'Process log','report.json':'Build report'};
+  for(const file of scan.outputs||[]){if(!labels[file])continue;const a=document.createElement('a');a.href=base()+'/files/'+file;a.textContent=labels[file];a.download=file;$('downloads').append(a);}
+  if(scan.outputs.includes('preview.json')&&previewKey!==scan.id){
+    const id=scan.id;previewKey=id;
+    api(base()+'/files/preview.json').then(data=>{
+      if(scan.id!==id||!scan.outputs.includes('preview.json'))return;
+      normalizeCloud(data.points);$('previewNote').textContent='Sparse preview: '+points.length.toLocaleString()+' sampled points of '+data.total.toLocaleString()+'. Drag to rotate; scroll or pinch to zoom. Mesh outputs can be opened in Blender or MeshLab.';
+    }).catch(()=>{previewKey=null;});
+  }
+}
+async function selectPhoto(photo){
+  selected=photo.id;const id=scan.id;selectedImage=null;
+  $('photoCanvas').style.display='none';$('photoEmpty').style.display='block';$('photoEmpty').textContent='Loading photo…';
+  $('photoTitle').textContent=photo.name;
+  const quality=$('quality');quality.replaceChildren();
+  for(const text of [photo.width+' × '+photo.height,photo.features+' features','Sharpness '+photo.sharpness,'Brightness '+photo.brightness+'/255',...photo.warnings]){
+    const pill=document.createElement('span');pill.className='pill';pill.textContent=text;quality.append(pill);
+  }
+  const img=new Image();
+  img.onload=()=>{if(selected!==photo.id||scan.id!==id)return;selectedImage=img;drawPhoto(photo);};
+  img.onerror=()=>notify('Could not load the photo preview.');
+  img.src=base()+'/photos/'+photo.id+'/image';
+  render();
+}
+function drawPhoto(photo=scan?.photos.find(p=>p.id===selected)){
+  if(!photo||!selectedImage)return;
+  const canvas=$('photoCanvas'),c=canvas.getContext('2d');
+  const scale=Math.min(1,1200/selectedImage.naturalWidth);
+  canvas.width=Math.round(selectedImage.naturalWidth*scale);canvas.height=Math.round(selectedImage.naturalHeight*scale);
+  canvas.style.display='block';$('photoEmpty').style.display='none';
+  c.drawImage(selectedImage,0,0,canvas.width,canvas.height);
+  if(!$('overlays').checked)return;
+  c.fillStyle='#67e6ff';
+  for(const [x,y] of photo.feature_points){c.beginPath();c.arc(x*canvas.width,y*canvas.height,3,0,Math.PI*2);c.fill();}
+  if(photo.feature_box){const [x0,y0,x1,y1]=photo.feature_box;c.strokeStyle='#ffcb80';c.lineWidth=3;c.strokeRect(x0*canvas.width,y0*canvas.height,(x1-x0)*canvas.width,(y1-y0)*canvas.height);}
+}
+$('overlays').onchange=()=>drawPhoto();
+async function uploadFiles(files){
+  if(uploading||active()||!scan)return;
+  uploading=true;clearTimeout(pollTimer);clearModel();notify('');render();
+  const errors=[];let duplicates=0,added=0;
+  try{
+    for(let i=0;i<files.length;i++){
+      const file=files[i];$('uploadStatus').textContent='Uploading '+(i+1)+' / '+files.length+'…';
+      if(scan.photos.length>=200){errors.push('The 200-photo limit was reached.');break;}
+      if(file.size>20*1024*1024){errors.push(file.name+': larger than 20 MB.');continue;}
+      try{
+        const result=await api(base()+'/photos?name='+encodeURIComponent(file.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
+        if(result.duplicate)duplicates++;else{scan.photos.push(result.photo);added++;}
+      }catch(error){errors.push(file.name+': '+error.message);}
+    }
+    scan=await api(base());
+  }catch(error){errors.push(error.message);}
+  finally{
+    uploading=false;$('files').value='';$('uploadStatus').textContent=added+' added'+(duplicates?' · '+duplicates+' duplicates skipped':'');
+    notify(errors.slice(0,5).join(' ')+(errors.length>5?' More files failed; try smaller batches.':''));
+    render();schedulePoll();
+  }
+}
+$('files').onchange=e=>uploadFiles(Array.from(e.target.files));
+$('drop').onclick=()=>{if(!uploading&&!active())$('files').click();};
+$('drop').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('drop').click();}};
+for(const event of ['dragenter','dragover'])$('drop').addEventListener(event,e=>{e.preventDefault();if(!uploading&&!active())$('drop').classList.add('over');});
+for(const event of ['dragleave','drop'])$('drop').addEventListener(event,e=>{e.preventDefault();$('drop').classList.remove('over');});
+$('drop').addEventListener('drop',e=>uploadFiles(Array.from(e.dataTransfer.files)));
+$('newScan').onclick=newScan;
+$('build').onclick=async()=>{
+  if(uploading||active())return;
+  notify('');$('build').disabled=true;clearModel();
+  try{scan=await api(base()+'/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dense:$('mode').value==='mesh',shared_camera:$('sameCamera').checked})});render();schedulePoll();}
+  catch(error){notify(error.message);render();}
+};
+$('cancel').onclick=async()=>{try{scan=await api(base()+'/cancel',{method:'POST'});render();}catch(error){notify(error.message);}};
+function normalizeCloud(data){
+  if(!data.length){points=[];drawCloud();return;}
+  const axes=[0,1,2].map(axis=>data.map(p=>p[axis]).sort((a,b)=>a-b));
+  const centers=axes.map(a=>a[Math.floor(a.length/2)]);
+  const ranges=axes.map(a=>a[Math.floor((a.length-1)*.95)]-a[Math.floor((a.length-1)*.05)]);
+  const scale=Math.max(...ranges,1e-9);
+  points=data.map(p=>[(p[0]-centers[0])/scale,(p[1]-centers[1])/scale,(p[2]-centers[2])/scale,...p.slice(3)]);
+  yaw=.4;pitch=-.2;zoom=1;drawCloud();
+}
+function drawCloud(){
+  const canvas=$('viewer'),c=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
+  c.fillStyle='#0b1013';c.fillRect(0,0,w,h);
+  if(!points.length){c.fillStyle='#9badb1';c.font='18px system-ui';c.textAlign='center';c.fillText('Your 3D point cloud will appear here',w/2,h/2);c.textAlign='left';return;}
+  const sy=Math.sin(yaw),cy=Math.cos(yaw),sx=Math.sin(pitch),cx=Math.cos(pitch);
+  const transformed=points.map(([x,y,z,r,g,b])=>{const a=x*cy+z*sy,d=-x*sy+z*cy;return [a,y*cx-d*sx,y*sx+d*cx,r,g,b];}).sort((a,b)=>a[2]-b[2]);
+  for(const [x,y,z,r,g,b] of transformed){const k=Math.min(w,h)*.68*zoom;const px=w/2+x*k,py=h/2+y*k;if(px<0||px>w||py<0||py>h)continue;c.fillStyle='rgb('+r+','+g+','+b+')';c.fillRect(px,py,2.5,2.5);}
+}
+let pointers=new Map(),pinchDistance=null;
+$('viewer').onpointerdown=e=>{pointers.set(e.pointerId,[e.clientX,e.clientY]);$('viewer').setPointerCapture(e.pointerId);pinchDistance=null;};
+$('viewer').onpointermove=e=>{
+  if(!pointers.has(e.pointerId))return;
+  const old=pointers.get(e.pointerId);pointers.set(e.pointerId,[e.clientX,e.clientY]);
+  if(pointers.size===1){yaw+=(e.clientX-old[0])*.01;pitch+=(e.clientY-old[1])*.01;}
+  else{const [a,b]=Array.from(pointers.values());const d=Math.hypot(a[0]-b[0],a[1]-b[1]);if(pinchDistance)zoom=Math.min(8,Math.max(.15,zoom*d/pinchDistance));pinchDistance=d;}
+  drawCloud();
+};
+for(const event of ['pointerup','pointercancel'])$('viewer').addEventListener(event,e=>{pointers.delete(e.pointerId);pinchDistance=null;});
+$('viewer').addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(8,Math.max(.15,zoom*Math.exp(-e.deltaY*.001)));drawCloud();},{passive:false});
+$('resetView').onclick=()=>{yaw=.4;pitch=-.2;zoom=1;drawCloud();};
+(async()=>{
+  drawCloud();
+  try{
+    health=await api('/api/health');$('engine').textContent=health.colmap?'COLMAP available':'COLMAP not installed';
+    const saved=localStorage.getItem('photoScanId');
+    if(saved){try{scan=await api('/api/scans/'+encodeURIComponent(saved));}catch{}}
+    if(!scan)await newScan();else{render();schedulePoll();}
+    if(!health.colmap)notify('Photo upload works now. To build a model, install COLMAP and restart the server. See README.md.');
+  }catch(error){notify('Could not connect to the server: '+error.message);}
+})();
+</script>
+</body>
+</html>
