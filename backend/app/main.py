@@ -1,4 +1,4 @@
-"""Live 3D scan guide. Run: python server.py  ->  http://localhost:8000
+"""Live 3D scan guide. Run: python -m backend.app.main -> http://localhost:8000
 Pipeline: JPEG frames -> changed-view photo capture + independent SIFT/PnP live map.
 On Finish: keyframes go to COLMAP (dense + Poisson mesh) -> scan/mesh.obj + scan/mesh.glb
 """
@@ -9,7 +9,7 @@ import cv2, numpy as np, uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import FileResponse
 
-BASE = Path(__file__).resolve().parent
+BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
 MAX_FRAME_BYTES = 5 * 1024 * 1024
 AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
@@ -250,7 +250,7 @@ class Scan:
 
 
 @app.get("/")
-def index(): return FileResponse(BASE / "index.html")
+def index(): return FileResponse(BASE / "frontend" / "index.html")
 
 
 @app.get("/scans/{scan_id}/{filename}")

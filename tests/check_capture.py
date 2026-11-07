@@ -1,4 +1,4 @@
-"""Run python check_capture.py to check capture without a physical camera."""
+"""Run python -m tests.check_capture from the repository root."""
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -6,7 +6,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 from fastapi.testclient import TestClient
-import server
+from backend.app import main as server
 
 def jpeg(image):
     return cv2.imencode(".jpg", image)[1].tobytes()

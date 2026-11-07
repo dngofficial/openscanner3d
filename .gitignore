@@ -6,3 +6,25 @@ scans
 
 # Keep actual user scans local.
 /sample-data/
+
+# Generated data, local configuration, and credentials
+/data/
+/models/*
+!/models/README.md
+.env
+.env.*
+!.env.example
+/config.local.toml
+/certs/
+/certificates/
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Dependencies and build caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+dist/
