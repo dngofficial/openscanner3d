@@ -9,6 +9,8 @@ import subprocess
 import time
 import zipfile
 
+from diagnostics import collect as collect_diagnostics, alignment_failure_message
+
 
 class Cancelled(Exception):
     pass
@@ -103,7 +105,7 @@ def create_preview(points_path, output, limit=6000):
 def package_results(root, model):
     with zipfile.ZipFile(root / "results.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         for name in ("sparse.ply", "dense.ply", "mesh.ply", "mesh.obj", "mesh.glb",
-                     "preview.json", "report.json", "reconstruction.log", "merged.ply", "merged_preview.json", "alignment.json"):
+                     "preview.json", "report.json", "reconstruction.log", "merged.ply", "merged_preview.json", "alignment.json", "diagnostics.json"):
             path = root / name
             if path.is_file():
                 archive.write(path, name)
@@ -119,6 +121,7 @@ def reconstruct(root, dense, shared_camera, cancel, update, merge_live=False):
     model = None
     sparse_ready = False
     report = {"registered_images": 0, "points": 0}
+    database = None
     try:
         exe = find_colmap()
         if not exe:
@@ -137,11 +140,17 @@ def reconstruct(root, dense, shared_camera, cancel, update, merge_live=False):
                       "--ImageReader.camera_model", "SIMPLE_RADIAL",
                       "--ImageReader.single_camera", "1" if shared_camera else "0",
                       gpu_extract, "0", size_option, "2400"]
-        if merge_live and (root / "masks").is_dir():
-            extraction += ["--ImageReader.mask_path", root / "masks"]
+        # Keep stationary background context for camera alignment. Cloud masks are applied during fusion.
+        if merge_live and "--SiftExtraction.peak_threshold" in extract_help:
+            extraction += ["--SiftExtraction.peak_threshold","0.003"]
         execute(exe, "feature_extractor", extraction, log, cancel)
         update(stage="matching", progress=25, message="Matching photos to find overlapping views…")
-        execute(exe, "exhaustive_matcher", ["--database_path", database, gpu_match, "0"], log, cancel)
+        matching=["--database_path",database,gpu_match,"0"]
+        for option in ("FeatureMatching.guided_matching","SiftMatching.guided_matching"):
+            if "--"+option in match_help:
+                matching += ["--"+option,"1"];break
+        execute(exe,"exhaustive_matcher",matching,log,cancel)
+        report["diagnostics"]=collect_diagnostics(root,database)
         update(stage="sparse", progress=40, message="Estimating camera positions and reconstructing sparse geometry…")
         execute(exe, "mapper", ["--database_path", database, "--image_path", root / "images",
                               "--output_path", sparse], log, cancel)
@@ -203,6 +212,10 @@ def reconstruct(root, dense, shared_camera, cancel, update, merge_live=False):
     except Cancelled:
         update(state="cancelled", stage="cancelled", message="Reconstruction cancelled. Uploaded photos are kept.")
     except Exception as error:
+        info=collect_diagnostics(root,database)
+        report["diagnostics"]=info
+        if info.get("initial_pair_failure") and not sparse_ready:
+            error=RuntimeError(alignment_failure_message(info))
         with log.open("a", encoding="utf-8") as f:
             f.write("\nPipeline error: " + str(error) + "\n")
         report["error"] = str(error)

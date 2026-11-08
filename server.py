@@ -30,7 +30,7 @@ MAX_PIXELS = 36_000_000
 ACTIVE = {"queued", "running"}
 OUTPUTS = {"sparse.ply", "dense.ply", "mesh.ply", "mesh.obj", "mesh.glb",
            "results.zip", "preview.json", "report.json", "reconstruction.log",
-           "merged.ply", "merged_preview.json", "alignment.json"}
+           "merged.ply", "merged_preview.json", "alignment.json", "diagnostics.json"}
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="reconstruction")
 DEPTH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="depth-loader")
 SESSIONS = {}

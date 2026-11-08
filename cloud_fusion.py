@@ -91,11 +91,17 @@ def camera_matrices(camera):
     return K, distortion, width, height
 
 
-def align_frame(depth, rgb, view, landmarks, step=4, mask=None):
+def align_frame(depth, rgb, view, landmarks, step=4, mask=None, restrict_anchors=False):
     K, distortion, width, height = camera_matrices(view["camera"])
-    if depth.shape != (height, width) or rgb.shape[:2] != depth.shape:
-        raise ValueError("Saved depth and registered image dimensions do not match.")
-    xy = view["xy"]
+    dh,dw=depth.shape
+    if rgb.shape[:2] != depth.shape:
+        raise ValueError("Saved depth and cloud color dimensions do not match.")
+    if abs(width/height-dw/dh)>.01:
+        raise ValueError("Tracking and depth image aspect ratios do not match.")
+    sx,sy=dw/width,dh/height
+    K=K.copy();K[0]*=sx;K[1]*=sy
+    xy=view["xy"]*np.array([sx,sy])
+    width,height=dw,dh
     if len(xy) < 25: raise ValueError("Not enough registered feature tracks.")
     anchor_xyz = np.array([landmarks[i] for i in view["ids"]])
     cam = anchor_xyz @ view["R"].T + view["t"]
@@ -104,6 +110,11 @@ def align_frame(depth, rgb, view, landmarks, step=4, mask=None):
                            cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE).ravel()
     inside = (xy[:, 0] >= .5) & (xy[:, 0] < width-.5) & (xy[:, 1] >= .5) & (xy[:, 1] < height-.5)
     valid = inside & np.isfinite(cam).all(axis=1) & (cam[:, 2] > 0)
+    if restrict_anchors and mask is not None:
+        anchor_mask=cv2.remap(mask,(xy[:,0]-.5).astype(np.float32).reshape(-1,1),
+                             (xy[:,1]-.5).astype(np.float32).reshape(-1,1),cv2.INTER_NEAREST,
+                             borderMode=cv2.BORDER_CONSTANT).ravel()
+        valid &= anchor_mask>0
     a, b, metrics = fit_inverse_depth(predictions[valid], cam[valid, 2])
     inverse = a*depth+b
     yy, xx = np.mgrid[2:height-2:step, 2:width-2:step]
@@ -150,7 +161,10 @@ def merge_live_clouds(root, model, cancel, update, max_voxels=500_000):
             if bgr is None: raise ValueError("Saved RGB frame is unavailable.")
             mask_path=root/"masks"/(name+".png")
             mask=cv2.imread(str(mask_path),cv2.IMREAD_GRAYSCALE) if mask_path.is_file() else None
-            world, rgb, metrics = align_frame(depth, bgr[:, :, ::-1], views[name], landmarks,mask=mask)
+            if bgr.shape[:2]!=depth.shape:
+                bgr=cv2.resize(bgr,(depth.shape[1],depth.shape[0]),interpolation=cv2.INTER_AREA)
+            world, rgb, metrics = align_frame(depth,bgr[:,:,::-1],views[name],landmarks,mask=mask,
+                                             restrict_anchors=not photo.get("tracking_context",False))
             if len(world) < 100: raise ValueError("Too few reliable dense points after filtering.")
             keys = np.floor(world/voxel).astype(np.int64)
             keys, inverse = np.unique(keys, axis=0, return_inverse=True)

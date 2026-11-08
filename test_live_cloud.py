@@ -57,6 +57,30 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(len(list((root/"masks").glob("*.jpg.png"))),2)
             client.close();server.SESSIONS.clear()
 
+    def test_original_tracking_context_is_kept_but_cloud_mask_excludes_it(self):
+        class RecordingDepth(FakeDepth):
+            def predict(self,rgb):
+                self.seen=rgb.copy()
+                return super().predict(rgb)
+        from video_capture import Capture
+        with tempfile.TemporaryDirectory() as directory,patch.object(server,"SCANS",Path(directory)):
+            session=server.Session("e"*32);engine=RecordingDepth()
+            image=np.full((960,1280,3),(40,140,40),np.uint8)
+            cv2.ellipse(image,(640,480),(210,300),0,0,360,(20,30,220),-1)
+            capture=Capture(session,engine)
+            capture.settings=dict(background=True,denoise=False,roi=[.25,.1,.75,.9])
+            reply=capture.process(cv2.imencode(".jpg",image)[1].tobytes())
+            photo=session.data["photos"][0];name=photo["id"]+".jpg"
+            saved=cv2.imread(str(session.root/"images"/name))
+            self.assertEqual(saved.shape[:2],(960,1280))
+            self.assertLess(float(np.linalg.norm(saved[20,20].astype(float)-[40,140,40])),5)
+            self.assertFalse(np.all(engine.seen[20,20]==127))
+            self.assertEqual(engine.seen.shape[:2],(480,640))
+            mask=cv2.imread(str(session.root/"masks"/(name+".png")),cv2.IMREAD_GRAYSCALE)
+            self.assertEqual(mask[10,10],0)
+            self.assertLess(reply["local_points"],6000)
+            self.assertTrue(photo["tracking_context"])
+
 
 class FusionTests(unittest.TestCase):
     def test_inverse_fit_handles_outliers_and_bad_anchors(self):
@@ -98,6 +122,14 @@ class FusionTests(unittest.TestCase):
         self.assertAlmostEqual(stats["offset"],.05,places=3)
         q=[np.cos(np.pi/4),0,0,np.sin(np.pi/4)]
         np.testing.assert_allclose(rotation(q)@[1,0,0],[0,1,0],atol=1e-8)
+
+    def test_camera_intrinsics_scale_to_depth_resolution(self):
+        view,landmarks=self.fixture(.08)
+        view["xy"]=view["xy"]*2
+        view["camera"]=("SIMPLE_RADIAL",1280,960,np.array([1080,640,480,0]))
+        world,_,_=align_frame(self.plane(.08),np.full((480,640,3),120,np.uint8),view,landmarks)
+        residual=np.abs(world[:,2]-(3+.2*world[:,0]+.15*world[:,1]))
+        self.assertLess(np.median(residual),1e-4)
 
     def test_three_clouds_merge_and_outlier_noise_is_filtered(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -38,7 +38,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 </section>
 <section class="panel"><h2>Live preprocessing</h2>
 <div class="depth-grid"><div><h2>Estimated relative depth</h2><img id="depth" alt="Estimated relative depth of the latest processed frame"></div><div><h2>Foreground mask</h2><img id="mask" alt="Foreground retained for point-cloud generation"></div></div>
-<p id="frameNote" class="status">Waiting for a processed frame.</p><small>The mask removes background pixels before point-cloud generation. Disable it for a whole-scene scan.</small>
+<p id="frameNote" class="status">Waiting for a processed frame.</p><small>The mask removes background from cloud geometry; original images retain camera-tracking detail. Disable it for a whole-scene scan.</small>
 </section>
 </div>
 <div class="grid">
@@ -65,7 +65,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 </section>
 <section class="panel"><h2>Collected geometry</h2><dl>
 <dt>Frames processed</dt><dd id="processed">0</dd><dt>Clouds saved</dt><dd id="saved">0 / 200</dd>
-<dt>Current cloud points</dt><dd id="pointCount">0</dd><dt>Foreground retained</dt><dd id="foreground">–</dd><dt>Processing time</dt><dd id="timing">–</dd><dt>Clouds aligned</dt><dd id="aligned">–</dd><dt>Merged points</dt><dd id="mergedCount">–</dd>
+<dt>Tracking features</dt><dd id="trackingFeatures">–</dd><dt>Current cloud points</dt><dd id="pointCount">0</dd><dt>Foreground retained</dt><dd id="foreground">–</dd><dt>Processing time</dt><dd id="timing">–</dd><dt>Clouds aligned</dt><dd id="aligned">–</dd><dt>Merged points</dt><dd id="mergedCount">–</dd>
 </dl><hr><progress id="progress" max="100" value="0" aria-label="Alignment stage progress"></progress><p id="buildStatus" class="muted">Alignment runs after capture.</p>
 <details><summary>How this works</summary><p>Each processed frame produces an estimated-depth cloud. Different camera views are saved with RGB, depth and foreground masks. Finish computes camera poses with COLMAP, calibrates each usable depth map against shared 3D landmarks, and fuses the aligned points.</p><p>A normal webcam does not measure depth. Geometry and scale are estimates, and some clouds may not align. Move the camera around a stationary object with plenty of overlapping views. Results use arbitrary units.</p><p>The first model load downloads weights from Hugging Face. CPU inference works but can be slow; compatible PyTorch CUDA support speeds it up. COLMAP is required for final alignment.</p></details>
 </section>
@@ -116,7 +116,7 @@ function scheduleFrame(){clearTimeout(frameTimer);if(capturing&&wsReady&&!inFlig
 function sendFrame(){
  if(!capturing||!wsReady||inFlight)return;
  if(video.readyState<2){scheduleFrame();return;}
- inFlight=true;refreshButtons();grab.width=640;grab.height=Math.max(240,Math.round(640*video.videoHeight/video.videoWidth));
+ inFlight=true;refreshButtons();grab.width=Math.min(1280,video.videoWidth);grab.height=Math.max(240,Math.round(grab.width*video.videoHeight/video.videoWidth));
  grab.getContext('2d').drawImage(video,0,0,grab.width,grab.height);
  grab.toBlob(blob=>{if(blob&&ws?.readyState===1)ws.send(blob);else{inFlight=false;pause();error('Camera frame could not be sent.');}},'image/jpeg',.92);
 }
@@ -133,6 +133,7 @@ function connectSocket(){
     if(r.mask)$('mask').src='data:image/jpeg;base64,'+r.mask;
     localViewer.set(r.cloud);
     $('processed').textContent=r.processed;$('saved').textContent=r.saved_count+' / 200';
+    $('trackingFeatures').textContent=r.features;
     $('pointCount').textContent=r.local_points.toLocaleString();$('timing').textContent=r.seconds+' s';
     $('foreground').textContent=Math.round(r.foreground*100)+'%';$('frameNote').textContent=r.note;
     if(r.saved){$('status').textContent='Saved cloud '+r.saved_count;finalKey=null;mergedViewer.set([]);$('mergeNote').textContent='Capture updated. The merged result appears after Finish & align.';}
@@ -156,7 +157,7 @@ function connectSocket(){
 async function start(){
  error('');
  try{
-  if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:$('camera').value?{exact:$('camera').value}:undefined,width:{ideal:640},height:{ideal:480}},audio:false});video.srcObject=stream;await video.play();drawRegion();}
+  if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:$('camera').value?{exact:$('camera').value}:undefined,width:{ideal:1280},height:{ideal:720}},audio:false});video.srcObject=stream;await video.play();drawRegion();}
   if(!wsReady)await connectSocket();
   capturing=true;$('status').textContent='Processing the live feed…';refreshButtons();scheduleFrame();
  }catch(e){error(e.message);refreshButtons();}
@@ -165,7 +166,7 @@ async function align(){
  pause();if(inFlight){finishPending=true;$('status').textContent='Finishing the current frame before alignment…';refreshButtons();return;}
  finishPending=false;error('');
  try{
-  scan=await api(base()+'/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dense:false,shared_camera:true,merge_live:true})});
+  scan=await api(base()+'/build',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dense:false,shared_camera:new Set(scan.photos.map(p=>p.width+"x"+p.height)).size===1,merge_live:true})});
   finalKey=null;mergedViewer.set([]);$('downloads').replaceChildren();renderScan();
  }catch(e){error(e.message);refreshButtons();}
 }
@@ -173,7 +174,7 @@ function renderScan(){
  $('saved').textContent=scan.photos.length+' / 200';$('processed').textContent=scan.processed_frames||0;
  $('progress').value=scan.progress;$('buildStatus').textContent=scan.message;
  $('aligned').textContent=scan.accepted_clouds??'–';$('mergedCount').textContent=scan.merged_points?.toLocaleString()??'–';
- const labels={'merged.ply':'Download merged point cloud (PLY)','results.zip':'Download all results','sparse.ply':'Sparse alignment cloud (PLY)','alignment.json':'Cloud alignment / noise report','reconstruction.log':'Process log'};
+ const labels={'merged.ply':'Download merged point cloud (PLY)','results.zip':'Download all results','sparse.ply':'Sparse alignment cloud (PLY)','alignment.json':'Cloud alignment / noise report','reconstruction.log':'Process log','diagnostics.json':'Feature / match diagnostics'};
  $('downloads').replaceChildren();
  for(const f of scan.outputs||[]){if(!labels[f])continue;const a=document.createElement('a');a.href=base()+'/files/'+f;a.download=f;a.textContent=labels[f];$('downloads').append(a);}
  if(scan.outputs.includes('merged_preview.json')&&finalKey!==scan.id&&!building()){

@@ -126,11 +126,11 @@ class PipelineTests(unittest.TestCase):
             import trimesh
             trimesh.creation.icosphere(subdivisions=1).export(output("--output_path"))
 
-    def run_pipeline(self, dense=False, command=None, modern=True):
+    def run_pipeline(self, dense=False, command=None, modern=True, merge_live=False):
         options = ("--FeatureExtraction.use_gpu --FeatureExtraction.max_image_size --FeatureMatching.use_gpu"
                    if modern else "--SiftExtraction.use_gpu --SiftExtraction.max_image_size --SiftMatching.use_gpu")
         with patch.object(pipeline, "find_colmap", return_value="fixture-colmap"),              patch.object(pipeline, "help_options", return_value=options),              patch.object(pipeline, "execute", side_effect=command or self.fake_command):
-            pipeline.reconstruct(self.root, dense, False, Event(), lambda **state: self.updates.append(state))
+            pipeline.reconstruct(self.root, dense, False, Event(), lambda **state: self.updates.append(state),merge_live=merge_live)
 
     def test_cpu_pipeline_largest_model_and_preview(self):
         self.run_pipeline()
@@ -162,6 +162,32 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue((self.root / "sparse.ply").is_file())
         self.assertTrue((self.root / "results.zip").is_file())
         self.assertFalse((self.root / "mesh.glb").exists())
+
+    def test_initial_pair_failure_has_actionable_report(self):
+        def fail_mapper(*args):
+            if args[1]=="mapper":
+                log=args[3]
+                log.write_text("".join("Features: "+str(v)+" (SIFT)\n" for v in [91,23,43,46,57,43,45,30,12,52,192,88,113,25,181,35,111,239])
+                               +"18 in 0.000s (connected 5, loaded 5)\nNo good initial image pair found.\n")
+                raise RuntimeError("mapper failed (exit 1)")
+            self.fake_command(*args)
+        self.run_pipeline(command=fail_mapper)
+        report=json.loads((self.root/"report.json").read_text())
+        self.assertIn("5 of 18",report["error"])
+        self.assertEqual(report["diagnostics"]["features_median"],49)
+        self.assertTrue((self.root/"diagnostics.json").is_file())
+
+    def test_context_features_are_not_foreground_masked(self):
+        options="--FeatureExtraction.use_gpu --FeatureExtraction.max_image_size --FeatureMatching.use_gpu --SiftExtraction.peak_threshold --FeatureMatching.guided_matching"
+        (self.root/"masks").mkdir()
+        with patch.object(pipeline,"find_colmap",return_value="fixture"), \
+             patch.object(pipeline,"help_options",return_value=options), \
+             patch.object(pipeline,"execute",side_effect=self.fake_command), \
+             patch("cloud_fusion.merge_live_clouds",return_value=dict(accepted_clouds=3,skipped_clouds=0,merged_points=100)):
+            pipeline.reconstruct(self.root,False,True,Event(),lambda **state:self.updates.append(state),merge_live=True)
+        self.assertNotIn("--ImageReader.mask_path",self.calls[0][1])
+        self.assertIn("--SiftExtraction.peak_threshold",self.calls[0][1])
+        self.assertIn("--FeatureMatching.guided_matching",self.calls[1][1])
 
     def test_cancellation_stops_subprocess(self):
         cancel = Event()

@@ -26,6 +26,10 @@ class Capture:
                 self.last["time"] = 0
 
     def features(self, rgb, mask=None):
+        if rgb.shape[1] != 640:
+            size=(640,round(rgb.shape[0]*640/rgb.shape[1]))
+            rgb=cv2.resize(rgb,size,interpolation=cv2.INTER_AREA)
+            if mask is not None: mask=cv2.resize(mask,size,interpolation=cv2.INTER_NEAREST)
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         keypoints, descriptors = self.sift.detectAndCompute(gray, mask)
         return dict(xy=np.float32([k.pt for k in keypoints]).reshape(-1,2), d=descriptors,
@@ -48,11 +52,16 @@ class Capture:
         bgr = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
         if bgr is None: raise ValueError("Cannot decode camera frame.")
         height, width = bgr.shape[:2]
-        target = (640, max(240, round(640*height/width)))
-        if target[1] > 960: raise ValueError("Unsupported camera aspect ratio.")
-        bgr = cv2.resize(bgr, target, interpolation=cv2.INTER_AREA)
-        bgr, mask = clean_frame(bgr, **self.settings)
-        rgb = bgr[:, :, ::-1].copy()
+        target = (640, round(640*height/width))
+        if target[1] < 120 or target[1] > 960: raise ValueError("Unsupported camera aspect ratio.")
+        tracking_bgr = bgr
+        if width > 1280:
+            tracking_bgr = cv2.resize(bgr,(1280,round(1280*height/width)),interpolation=cv2.INTER_AREA)
+        working_bgr = cv2.resize(bgr, target, interpolation=cv2.INTER_AREA)
+        _, mask = clean_frame(working_bgr, **self.settings)
+        # Preserve context for pose tracking and depth; apply the foreground mask to geometry.
+        model_bgr = cv2.bilateralFilter(working_bgr,5,25,25) if self.settings["denoise"] else working_bgr
+        rgb = working_bgr[:, :, ::-1].copy()
         foreground = float(np.mean(mask>0))
         mask_image = cv2.applyColorMap(mask, cv2.COLORMAP_VIRIDIS)
         import base64
@@ -63,9 +72,9 @@ class Capture:
                         saved_count=len(self.session.data["photos"]),saved=False,features=0,seconds=0,
                         foreground=foreground,note="No foreground found. Adjust the object rectangle or disable background removal.",limit_reached=False)
         started = time.monotonic()
-        inverse = self.engine.predict(rgb)
+        inverse = self.engine.predict(model_bgr[:, :, ::-1].copy())
         xyz, colors = local_cloud(inverse, rgb, mask=feature_mask(mask))
-        current = self.features(rgb, feature_mask(mask))
+        current = self.features(rgb)
         saved = False
         note = "Live cloud updated; waiting for a changed camera view."
         with self.session.lock:
@@ -78,13 +87,13 @@ class Capture:
                 image_path = self.session.root / "images" / (photo_id + ".jpg")
                 for directory in ("depth","clouds","thumbs","masks"):
                     (self.session.root/directory).mkdir(exist_ok=True)
-                encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY,95])[1]
+                encoded = cv2.imencode(".jpg", tracking_bgr, [cv2.IMWRITE_JPEG_QUALITY,95])[1]
                 try:
                     image_path.write_bytes(encoded.tobytes())
                     cv2.imwrite(str(self.session.root / "masks" / (photo_id + ".jpg.png")), feature_mask(mask))
                     np.savez_compressed(self.session.root / "depth" / (photo_id + ".npz"), inverse_depth=inverse)
                     write_ply(self.session.root / "clouds" / (photo_id + ".ply"), xyz, colors)
-                    thumb = cv2.resize(bgr, (320, max(1, round(320*bgr.shape[0]/bgr.shape[1]))))
+                    thumb = cv2.resize(working_bgr, (320, max(1, round(320*working_bgr.shape[0]/working_bgr.shape[1]))))
                     (self.session.root / "thumbs" / (photo_id + ".jpg")).write_bytes(cv2.imencode(".jpg",thumb)[1].tobytes())
                 except Exception:
                     image_path.unlink(missing_ok=True)
@@ -92,9 +101,10 @@ class Capture:
                         (self.session.root/directory/(photo_id+suffix)).unlink(missing_ok=True)
                     raise
                 for output in ("merged.ply","merged_preview.json","preview.json","results.zip","alignment.json",
-                               "sparse.ply","dense.ply","mesh.ply","mesh.obj","mesh.glb","report.json","reconstruction.log"):
+                               "sparse.ply","dense.ply","mesh.ply","mesh.obj","mesh.glb","report.json","reconstruction.log","diagnostics.json"):
                     (self.session.root/output).unlink(missing_ok=True)
-                photos.append(dict(id=photo_id, name=f"Cloud {len(photos)+1}", width=rgb.shape[1], height=rgb.shape[0],
+                photos.append(dict(id=photo_id, name=f"Cloud {len(photos)+1}", width=tracking_bgr.shape[1], height=tracking_bgr.shape[0],
+                                   depth_width=rgb.shape[1], depth_height=rgb.shape[0], tracking_context=True,
                                    features=len(current["xy"]), warnings=[], digest=hashlib.sha256(encoded).hexdigest(), foreground=foreground))
                 self.last = current
                 saved = True

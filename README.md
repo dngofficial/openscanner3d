@@ -33,7 +33,7 @@ Linux/macOS:
 Install COLMAP separately from https://colmap.github.io/install.html. Its executable must be on PATH, or set COLMAP_EXE before starting the server:
 
     # PowerShell; replace this with the actual installed path:
-    $env:COLMAP_EXE = 'C:\Tools\COLMAP\COLMAP.bat'
+    $env:COLMAP_EXE = "C:\Users\Devan_\Downloads\colmap-x64-windows-cuda\COLMAP.bat"
     .\.venv-cloud\Scripts\python.exe server.py
 
     # Linux/macOS:
@@ -59,7 +59,7 @@ The camera preview and live depth/cloud panels show the capture stage. The final
 
 Background cleanup uses OpenCV GrabCut inside the selected rectangle at reduced resolution. Bilateral filtering reduces image noise while retaining edges. Mask cleanup removes small components, closes small holes and erodes the mask boundary.
 
-The cleaned image feeds depth estimation. The mask excludes background pixels from the live cloud, feature extraction for COLMAP, and final fusion. It is saved beside each keyframe; this avoids including the removed background again during final alignment.
+Original images, including stationary background detail, are retained for COLMAP camera tracking. Relative depth is estimated from the full scene with optional light denoising. The foreground mask is applied to live and merged cloud geometry, so removed background pixels do not become output points. Masking the tracking images too aggressively can leave too few matching features; this version avoids that failure.
 
 This is color-based foreground isolation, not semantic object detection. It can fail when foreground and background have similar colors, or with thin parts, shadows, transparency or multiple overlapping objects. Watch the mask rather than assuming it identified the subject correctly. A tight rectangle and contrasting, simple background help. Changing the rectangle can clip different parts across frames.
 
@@ -73,34 +73,35 @@ Depth Anything V2 Small predicts relative inverse depth. The live preview conver
 
 On Finish:
 
-1. COLMAP matches masked RGB frames and jointly estimates camera poses and sparse 3D landmarks. The largest connected registered model is selected.
+1. COLMAP matches original, unmasked RGB frames and jointly estimates camera poses and sparse 3D landmarks. The largest connected registered model is selected.
 2. Each saved inverse-depth map is robustly calibrated against the positive camera-space depths of shared SfM landmarks. At least 25 anchors are required; poorly supported or inconsistent fits are rejected.
-3. The calibrated depth is back-projected with the fitted camera intrinsics and lens-distortion correction. Each cloud is transformed with the inverse of its COLMAP world-to-camera pose.
+3. The calibrated depth is back-projected with camera intrinsics scaled to the depth-map resolution and lens-distortion correction. Each cloud is transformed with the inverse of its COLMAP world-to-camera pose.
 4. World points are averaged into one voxel cloud, filtered and exported.
 
 This uses shared camera geometry and per-view depth calibration rather than blindly registering arbitrary-scale clouds with ICP. No ICP refinement is currently applied. Unregistered views and unreliable depth fits are skipped and listed in alignment.json; the app does not force every cloud into the result.
 
-A webcam alone cannot guarantee accurate or metric 3D geometry. Scale remains arbitrary, depth estimates can be biased, and background removal can make already texture-poor objects harder to register. Keep the object rigid and still. Camera rotation in place, blur, smooth or reflective surfaces, moving backgrounds and weak overlap can prevent alignment. No unseen surfaces or watertight mesh are generated. For reliable measured geometry, a calibrated RGB-D or stereo sensor is a better input.
+A webcam alone cannot guarantee accurate or metric 3D geometry. Scale remains arbitrary, depth estimates can be biased, and aggressive foreground masking can remove real object parts. Keep the object rigid and still. Camera rotation in place, blur, smooth or reflective surfaces, moving backgrounds and weak overlap can prevent alignment. No unseen surfaces or watertight mesh are generated. For reliable measured geometry, a calibrated RGB-D or stereo sensor is a better input.
 
 ## Saved data
 
 Each scan is stored under scans/<scan-id>/ next to server.py:
 
-- images/: cleaned RGB keyframes for camera alignment.
+- images/: original RGB keyframes, up to 1280 pixels wide, for camera alignment.
 - depth/: saved relative inverse-depth maps in compressed NPZ.
-- masks/: binary foreground feature masks (image-name.jpg.png, as expected by COLMAP).
+- masks/: binary foreground geometry masks (image-name.jpg.png). They are not used to hide camera-tracking background context.
 - clouds/: local relative-depth PLY clouds before alignment.
 - thumbs/: small RGB previews.
 - run_<timestamp>/: COLMAP working database and sparse models.
 - merged.ply: final aligned and filtered point cloud.
 - merged_preview.json: a smaller browser preview.
 - alignment.json: accepted/skipped views, per-view depth scale fits and filtering counts.
-- sparse.ply, report.json, reconstruction.log: alignment geometry and diagnostics.
+- sparse.ply, report.json, reconstruction.log: alignment geometry and logs.
+- diagnostics.json: feature counts and verified-match connectivity from the COLMAP database/log.
 - results.zip: available final exports, diagnostics and selected COLMAP sparse model. It excludes the raw per-frame input/depth/local-cloud directories.
 
 The browser remembers the current scan ID, allowing refresh/reopen. Capture stays paused after reload; click Start to resume. New scan keeps old folders. Remove old folders manually when no longer needed. Scan data remains on this computer; only model weights need an initial network download.
 
-Up to 200 changed views are saved. Capture uses images at 640 pixels wide. Fusion retains at most 500,000 voxels; the report records points ignored at this memory limit. Uploaded photo limits from the older API do not affect live capture.
+Up to 200 changed views are saved. Camera frames are sent and saved at up to 1280 pixels wide, while depth inference stays at 640 pixels wide. The code adjusts camera calibration between those resolutions. A 640-pixel camera is not upscaled for tracking. Fusion retains at most 500,000 voxels; the report records points ignored at this memory limit. Uploaded photo limits from the older API do not affect live capture.
 
 Starting another capture after a finished merge invalidates that merge's public exports once a new cloud is saved; earlier COLMAP run folders remain. Restarting during alignment marks the job interrupted and retains the collected data for retry. The server binds to 127.0.0.1.
 
@@ -120,3 +121,15 @@ Model and command references:
 - https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
 - https://colmap.github.io/cli.html
 - https://colmap.github.io/format.html
+
+## If the mapper cannot find an initial image pair
+
+A message such as `No good initial image pair found` means the feature/matching commands ran, but usable overlapping camera geometry could not be initialized. It is not an installation or CUDA error by itself.
+
+This release preserves original tracking images, uses a more sensitive SIFT peak threshold when supported, and enables guided matching when supported. It retains normal geometric initialization checks rather than forcing a bad camera solution. The new diagnostics report shows feature counts, verified pair counts, connected images and largest connected component when a database is available.
+
+Stop the old server and replace the code, including video_capture.py, cloud_fusion.py, reconstruction.py and diagnostics.py. Restart and refresh the browser. Choose New scan before recapturing: older images saved by the previous release already have their background painted out, and no update can restore those removed pixels. Older depth maps are still supported with foreground-only depth anchors, but the saved dataset may remain insufficient.
+
+Keep the object and background stationary while moving the camera. Use small view changes with overlap. A textured stationary surface behind or beside the object can now help camera tracking while remaining excluded from the output cloud by the foreground mask. Inspect that mask to ensure it retains the whole object.
+
+A failed old scan can be retried without deleting its scan folder; stronger feature settings may help, but successful registration is not guaranteed. Only the log and report are insufficient to validate a repair on that dataset; the captured images/depth maps are needed.
