@@ -1,0 +1,2 @@
+# QR dependency for older environments. Also included by the main requirements.txt.
+segno==1.6.6

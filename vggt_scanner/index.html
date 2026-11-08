@@ -5,6 +5,7 @@
 <title>Multi-angle photo scanner · VGGT</title>
 <style>
 :root{color-scheme:dark;--bg:#101719;--panel:#1b262a;--line:#385052;--text:#e6eeea;--dim:#a3b8b6;--mint:#a4dfb0;--amber:#ffca78}
+[hidden]{display:none!important}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
 header{padding:22px 28px;border-bottom:1px solid var(--line)}h1{margin:0;font-size:26px;letter-spacing:-.5px}h2{font-size:16px;margin:0 0 10px}p{margin:8px 0}
 main{display:grid;grid-template-columns:minmax(0,1fr) 335px;gap:20px;max-width:1550px;padding:22px 28px;margin:auto}
@@ -56,6 +57,16 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 </details>
 </div>
 <aside>
+<section class="panel"><h2>Scan to connect your phone</h2>
+<p class="muted">On the same Wi-Fi, point your phone’s camera at this code and open the link. Photos join this laptop scan.</p>
+<p id="phoneProblem" class="status" role="status"></p>
+<img id="phoneQR" alt="Pair your phone with this VGGT scan" style="display:block;width:240px;max-width:100%;image-rendering:pixelated;background:white;border-radius:8px;margin:12px auto" hidden>
+<label id="phoneAddressLabel" for="phoneAddress" hidden>Wi-Fi address</label><select id="phoneAddress" class="full" hidden></select>
+<button id="phoneConnect" class="full">Refresh QR code</button>
+<details><summary>Or open the phone link</summary><div id="phoneLinks" style="overflow-wrap:anywhere"></div></details>
+<p id="phoneCoverage" class="muted"></p>
+<small>Trust the phone certificate once, then scan to pair. Keep the object still and walk around it.</small>
+</section>
 <section class="panel"><h2>Capture and build</h2>
 <div id="engine" class="status">Checking VGGT…</div><button id="loadModel" class="full">Load VGGT model</button>
 <small style="display:block;margin-top:8px">First load downloads several GB of weights. Capture can run while the model loads.</small>
@@ -95,10 +106,35 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 const $=id=>document.getElementById(id),video=$('video'),grab=document.createElement('canvas');
 let scan=null,health=null,stream=null,ws=null,wsReady=false,capturing=false,inFlight=false,finishPending=false,uploading=false;
 let region=[.1,.08,.9,.92],frameTimer=null,pollTimer=null,mapKey=null,previewFrame=-1,galleryKey='';
+let connectScan=null;
 const busy=()=>scan&&['queued','running'].includes(scan.job.state);
 const manual=()=>$('captureMode').value==='manual';
 const base=()=>'/api/scans/'+scan.id;
 function error(s){$('error').textContent=s;}
+async function refreshPhoneLink(){
+ if(!scan)return;const id=scan.id;
+ $('phoneLinks').replaceChildren();$('phoneQR').hidden=true;$('phoneAddress').replaceChildren();$('phoneAddress').hidden=true;$('phoneAddressLabel').hidden=true;
+ try{
+  const result=await api('/api/connect?scan_id='+id);if(scan.id!==id)return;
+  $('phoneProblem').textContent=result.problem||'';
+  for(const [index,url] of (result.links||[]).entries()){
+   const a=document.createElement('a');a.href=url;a.textContent=url;a.style.color='var(--mint)';a.style.display='block';$('phoneLinks').append(a);
+   const option=document.createElement('option');option.value=String(index);option.textContent=new URL(url).host;$('phoneAddress').append(option);
+  }
+  if(result.links?.length){
+   $('phoneAddress').value='0';$('phoneAddress').hidden=result.links.length<2;$('phoneAddressLabel').hidden=result.links.length<2;
+   $('phoneQR').onload=()=>{if(scan.id===id)$('phoneProblem').textContent='Scan with your phone camera to join this scan.';};
+   $('phoneQR').onerror=()=>{if(scan.id!==id)return;$('phoneQR').hidden=true;$('phoneProblem').textContent='QR unavailable. Install requirements-phone.txt in the VGGT environment, restart, or open the phone link below.';};
+   showPhoneQR();
+  }
+ }catch(e){$('phoneProblem').textContent=e.message;}
+}
+function showPhoneQR(){
+ if(!scan)return;
+ $('phoneQR').hidden=false;$('phoneQR').src='/api/connect/qr?scan_id='+scan.id+'&index='+($('phoneAddress').value||'0');
+}
+$('phoneAddress').onchange=showPhoneQR;
+$('phoneConnect').onclick=refreshPhoneLink;
 async function api(path,options={}){
  const response=await fetch(path,options);
  if(!response.ok){let body;try{body=await response.json();}catch{}throw Error(typeof body?.detail==='string'?body.detail:'Request failed ('+response.status+').');}
@@ -184,6 +220,9 @@ async function finish(){
 }
 function resultBase(job){return base()+'/results/'+job;}
 function render(){
+ if(connectScan!==scan.id){connectScan=scan.id;refreshPhoneLink();}
+ if(scan.phone_mode){$('turntable').checked=false;$('captureTip').textContent='Phone capture: keep the object stationary and walk around it. Sensor angles guide capture; VGGT estimates its own cameras.';}
+ $('phoneCoverage').textContent=scan.coverage?scan.coverage.have+' / '+scan.coverage.wanted+' guided angles · '+scan.photos.filter(p=>p.source==='phone').length+' phone photos':'';
  $('auto').checked=scan.auto;
  $('saved').textContent=scan.photos.length+' / 200';$('processed').textContent=scan.processed;
  $('maskTip').textContent=scan.options.turntable?'Rotating-item mode masks the background before reconstruction. Check that the latest mask includes the entire item.':'The foreground mask filters the output cloud; full images feed the reconstruction model.';
@@ -294,8 +333,8 @@ const mergedViewer=viewer('mergedCloud'),localViewer=viewer('localCloud');$('res
 window.addEventListener('beforeunload',()=>{capturing=false;ws?.close();stream?.getTracks().forEach(t=>t.stop());});
 (async()=>{
  try{health=await api('/api/health');
- const devices=await navigator.mediaDevices.enumerateDevices();for(const d of devices.filter(d=>d.kind==='videoinput'))$('camera').add(new Option(d.label||'Camera '+$('camera').options.length,d.deviceId));
- const id=localStorage.getItem('vggtScanId');if(id)try{scan=await api('/api/scans/'+encodeURIComponent(id));}catch{}
+ const devices=await navigator.mediaDevices?.enumerateDevices?.().catch(()=>[])||[];for(const d of devices.filter(d=>d.kind==='videoinput'))$('camera').add(new Option(d.label||'Camera '+$('camera').options.length,d.deviceId));
+ const id=new URLSearchParams(location.search).get('scan')||localStorage.getItem('vggtScanId');if(id)try{scan=await api('/api/scans/'+encodeURIComponent(id));localStorage.setItem('vggtScanId',scan.id);}catch{}
  if(scan){restoreSettings();render();drawRegion();}else await newScan();
  pollHealth();refreshScan();
  }catch(e){error(e.message);}

@@ -19,6 +19,7 @@ const clone=o=>JSON.parse(JSON.stringify(o));
 async function fetch(path,options={}){
  let data=state;
  if(path==='/api/health')data={vggt:{installed:true,state:'ready',device:'cpu'},preview:{state:'unloaded'}};
+ else if(path.startsWith('/api/connect?'))data={problem:'',links:['https://192.168.1.10:8000/phone?key=fixture&scan='+state.id,'https://192.168.2.10:8000/phone?key=fixture&scan='+state.id]};
  else if(path.endsWith('/preview.json'))data={points:[[0,0,1,100,120,130],[1,1,2,140,150,160]],total:2};
  else if(path.endsWith('/finish')){finishes++;state.finish_requested=true;state.job={id:'b'.repeat(32),state:'queued',progress:0,message:'Queued',final:true};}
  else if(path.endsWith('/photos')||path.includes('/photos?')){state.photos.push({id:'upload',name:'Uploaded angle'});state.revision++;data={added:true,scan:state};}
@@ -40,13 +41,16 @@ class Socket{
  close(){this.readyState=3;this.onclose?.();}
 }
 const storage=new Map();
-const sandbox={document:{getElementById:el,createElement:()=>new Element()},fetch,WebSocket:Socket,console,
+const sandbox={document:{getElementById:el,createElement:()=>new Element()},fetch,WebSocket:Socket,console,URLSearchParams,URL,
  setTimeout:()=>1,clearTimeout(){},location:{protocol:'http:',host:'localhost:8000'},window:{addEventListener(){}},
  localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
  navigator:{mediaDevices:{enumerateDevices:async()=>[],getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}}};
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  vm.createContext(sandbox);await vm.runInContext(script,sandbox);await flush();
+ assert.equal(nodes.phoneQR.hidden,false);assert(nodes.phoneQR.src.includes('scan_id='+state.id));
+ assert.equal(nodes.phoneAddress.children.length,2);nodes.phoneAddress.value='1';nodes.phoneAddress.onchange();
+ assert(nodes.phoneQR.src.endsWith('&index=1'),'Network selection updates the scan-specific QR code.');
  assert.equal(nodes.captureMode.value,'manual');assert(nodes.auto.disabled);
  assert.equal(nodes.start.disabled,false);await nodes.start.onclick();
  assert(latestSocket.pending,'Starting the camera requests one foreground preview.');

@@ -1,5 +1,11 @@
 # Local object scanner
 
+**VGGT branch:** run the app in [`vggt_scanner/`](vggt_scanner/README.md).
+Direct phone camera and motion-guided capture now feed the existing VGGT pipeline;
+see [VGGT phone setup](vggt_scanner/PHONE_SETUP.md) for trusted LAN HTTPS, pairing and launch commands.
+The VGGT branch currently exports colored PLY points. The older COLMAP/Camo instructions below
+describe the separate prototype.
+
 Builds on the existing FastAPI + browser capture prototype. `PLAN.md` remains the scope authority; `docs/implementation_plan.md` is long-term background.
 
 ## Windows quick start

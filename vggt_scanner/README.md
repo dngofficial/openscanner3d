@@ -3,6 +3,10 @@
 This version replaces the earlier COLMAP/SIFT alignment and per-frame depth-scale fitting with joint VGGT camera/depth prediction.
 
 It supports:
+- Direct phone-browser capture over trusted private LAN HTTPS, with rear camera, motion permissions,
+  rotation/acceleration steadiness checks, a 12-side x 3-height checklist, manual fallback, undo and resume.
+- Scan-specific laptop QR pairing, with a Wi-Fi address selector and a direct-link fallback.
+  See [phone setup and launch](PHONE_SETUP.md).
 - Manual webcam photos: keep the camera fixed, rotate the item yourself and click Take photo at each angle.
 - A live webcam preview and optional automatic selection of changed, usable frames.
 - Periodic background reconstruction while capture continues.
@@ -141,7 +145,8 @@ These single-frame relative-depth clouds are display-only. They are not appended
 
 Each scan is stored under scans/<scan-id>/:
 
-- images/: original selected RGB views.
+- images/: selected RGB working views; uploads are normalized for orientation and size.
+- originals/: newly uploaded source bytes unchanged; images/ holds normalized working copies.
 - masks/: per-view foreground masks.
 - thumbs/: thumbnail gallery images.
 - session.json: saved capture/settings/job state and pointer to the latest successful result.
@@ -166,13 +171,19 @@ Use New scan for a separate object. Delete old scan folders manually to recover 
 
 This is an image-based estimated 3D point model. It does not guarantee metric dimensions, unseen geometry, a watertight mesh or measurement accuracy. The colored PLY has vertices, not mesh faces. Shiny, transparent, moving or texture-poor subjects and weak view coverage remain difficult. The app is not a camera-rate SLAM system and does not provide a continuously optimized metric trajectory.
 
-The server binds to 127.0.0.1. The web camera requires browser permission and localhost access. Internet is needed for dependency/source installation and first model downloads; images are processed locally by the running server.
+The server binds to 127.0.0.1 by default. `server.py --lan` requires a trusted TLS certificate and
+enables private-network phone capture with a per-launch pairing key. Live camera access requires
+browser permission and a secure context. Internet is needed for dependency/source installation and
+first model downloads; images are processed locally by the running server. Phone capture uses full
+images for VGGT camera prediction, with turntable mode disabled. Sensors guide capture only.
 
 ## Validation
 
     .\.venv-vggt\Scripts\python.exe -m pip install httpx
     .\.venv-vggt\Scripts\python.exe -m unittest discover -p "test_*.py" -v
     node test_ui.cjs
+    node --test guidance.test.mjs
+    node test_phone_ui.cjs
 
 Node.js is optional and used only for control-flow tests.
 

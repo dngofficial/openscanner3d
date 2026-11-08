@@ -111,7 +111,7 @@ class ApiTests(unittest.TestCase):
         self.storage=patch.object(server,"SCANS",Path(self.temp.name));self.storage.start()
         self.backend=patch.object(server,"BACKEND",FixtureBackend());self.backend.start()
         self.queue=CollectedJobs();self.worker=patch.object(server,"JOBS",self.queue);self.worker.start()
-        server.SESSIONS.clear();self.client=TestClient(server.app)
+        server.SESSIONS.clear();self.client=TestClient(server.app, base_url="http://localhost", client=("127.0.0.1", 50000))
         self.scan=self.client.post("/api/scans").json();self.path="/api/scans/"+self.scan["id"]
         self.client.put(self.path+"/settings",json=dict(auto=False,foreground=False,image_size=224,max_views=6))
         self.client.put(self.path+"/capture-settings",json=dict(mode="auto",roi=[.1,.1,.9,.9],background=False,preview=False,denoise=False))
@@ -130,7 +130,7 @@ class ApiTests(unittest.TestCase):
 
     def test_manual_capture_only_saves_requested_photos_and_finishes(self):
         config=dict(type="settings",mode="manual",roi=[.1,.1,.9,.9],background=False,preview=False,denoise=False)
-        with self.client.websocket_connect("/ws/"+self.scan["id"]) as ws:
+        with self.client.websocket_connect("ws://localhost/ws/"+self.scan["id"]) as ws:
             self.assertEqual(ws.receive_json()["type"],"ready")
             ws.send_text(json.dumps(config));self.assertEqual(ws.receive_json()["type"],"settings")
             for i in range(3):
@@ -153,7 +153,7 @@ class ApiTests(unittest.TestCase):
     def test_manual_soft_frame_is_saved_once_and_mode_is_validated(self):
         self.assertEqual(self.client.put(self.path+"/capture-settings",json=dict(mode="invalid")).status_code,400)
         self.assertEqual(self.client.put(self.path+"/settings",json=dict(turntable=True,foreground=False)).status_code,400)
-        with self.client.websocket_connect("/ws/"+self.scan["id"]) as ws:
+        with self.client.websocket_connect("ws://localhost/ws/"+self.scan["id"]) as ws:
             ws.receive_json()
             ws.send_text(json.dumps(dict(type="settings",mode="manual",background=False,denoise=False)))
             self.assertEqual(ws.receive_json()["type"],"settings")
@@ -179,7 +179,7 @@ class ApiTests(unittest.TestCase):
 
     def test_capture_continues_during_background_job(self):
         self.add_views();self.client.post(self.path+"/build")
-        with self.client.websocket_connect("/ws/"+self.scan["id"]) as ws:
+        with self.client.websocket_connect("ws://localhost/ws/"+self.scan["id"]) as ws:
             self.assertEqual(ws.receive_json()["type"],"ready")
             ws.send_text(json.dumps(dict(type="settings",roi=[.1,.1,.9,.9],background=False,preview=False,denoise=False)))
             self.assertEqual(ws.receive_json()["type"],"settings")
