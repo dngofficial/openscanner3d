@@ -57,6 +57,27 @@ class FitBoxTests(unittest.TestCase):
         self.assertAlmostEqual(scene.box_radius, silhouette.BOX_RADIUS * scene.orbit)
         self.assertAlmostEqual(scene.box_height, silhouette.BOX_HEIGHT * scene.orbit)
 
+    def test_measured_camera_angles_match_the_synthetic_rig_and_fill_missing_poses(self):
+        from backend.app import coverage
+        from backend.app.reconstruction import fill_angles
+        with tempfile.TemporaryDirectory() as temp:
+            workspace, images = build_scene(Path(temp))
+            angles = silhouette.camera_angles(silhouette.load_scene(workspace))
+            # Ring 0: 8 cameras 45 degrees apart, 3.0 out and 1.6 up, aimed at height 0.45 (~21 degrees down).
+            self.assertEqual(angles["kf_0000.jpg"][0], 0)
+            self.assertAlmostEqual(abs(angles["kf_0001.jpg"][0]), 45, delta=2)
+            self.assertAlmostEqual(angles["kf_0000.jpg"][1], 21, delta=2)
+            self.assertAlmostEqual(angles["kf_0008.jpg"][1], 42, delta=2)   # Ring 1: 2.4 out, 2.6 up.
+            scan = Path(temp)
+            poses = [dict(name=name, azimuth=None, pitch=None, ring=None, sector=None) for name in sorted(angles)]
+            poses[0].update(azimuth=10.0, pitch=30.0, ring=1, sector=0)     # Phone angles are kept.
+            (scan / "poses.json").write_text(json.dumps(poses))
+            self.assertEqual(fill_angles(scan, workspace), 15)
+            filled = json.loads((scan / "poses.json").read_text())
+            self.assertEqual(filled[0]["azimuth"], 10.0)
+            self.assertEqual(filled[1]["angle_source"], "colmap")
+            self.assertEqual(coverage.summarise(filled)["unguided"], 0)
+
     def test_masks_cached_by_an_older_version_are_not_reused(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)

@@ -4,9 +4,10 @@ Usage (from the repository root):
     .venv/Scripts/python.exe -m scripts.register_scan scans\\20261108_101904_0614403d
 
 The dashboard lists folders in scans/ that have scan.json. This writes the files it reads, only where
-they are missing (existing ones are kept): scan.json (finished, photo size), poses.json (photos without
-angle data), run.json (the newest COLMAP run, so Rebuild object works) and status.json (ready or failed,
-from object.json / result.json). Photos, models and runs are not touched.
+they are missing (existing ones are kept): scan.json (finished, photo size), poses.json, run.json (the
+newest COLMAP run, so Rebuild object works) and status.json (ready or failed, from object.json /
+result.json). Photos without angle data get their angles from COLMAP's measured camera poses (marked
+"angle_source": "colmap"), so the coverage dial is filled. Photos, models and runs are not touched.
 """
 import argparse
 from datetime import datetime, timezone
@@ -28,7 +29,7 @@ def write_new(path: Path, value) -> bool:
 
 
 def register(scan: Path) -> list[str]:
-    from backend.app.reconstruction import describe_object, newest_run
+    from backend.app.reconstruction import describe_object, fill_angles, newest_run
     if not re.fullmatch(SCAN_ID, scan.name):
         raise ValueError(f"{scan.name} is not a scan ID (YYYYMMDD_HHMMSS_xxxxxxxx)")
     photos = sorted((scan / "images").glob("kf_*.jpg"))
@@ -48,6 +49,10 @@ def register(scan: Path) -> list[str]:
     run = newest_run(scan)
     if run and write_new(scan / "run.json", dict(run=run.name)):
         written.append("run.json")
+    if run:
+        filled = fill_angles(scan, run)
+        if filled:
+            written.append(f"angles for {filled} photos (from COLMAP)")
     try:
         message = describe_object(json.loads((scan / "object.json").read_text(encoding="utf-8")))
     except (OSError, ValueError, KeyError):

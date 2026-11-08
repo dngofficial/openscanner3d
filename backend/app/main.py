@@ -26,7 +26,7 @@ import uvicorn
 from . import coverage, network, quality
 from .config import DETAIL, load_settings, project_path, resolve_tool
 from .images import MAX_UPLOAD_BYTES, decode_jpeg, normalize_photo
-from .reconstruction import PREVIEWS, _heavy_job, rebuild_object, reconstruct
+from .reconstruction import PREVIEWS, _heavy_job, fill_angles, newest_run, rebuild_object, reconstruct
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
@@ -293,6 +293,13 @@ def start_reconstruction(scan_id: str):
         try:
             result = reconstruct(scan / "images", scan, SETTINGS, stage)
             state = "ready" if result.get("model_ready") else "failed"
+            run_folder = newest_run(scan)
+            if run_folder:  # Uploaded photos have no phone angles: fill the dial from COLMAP's measured poses.
+                try:
+                    with _write_lock:
+                        fill_angles(scan, run_folder)
+                except (ValueError, OSError, KeyError):
+                    logging.exception("Could not fill photo angles from COLMAP")
             write(scan / "status.json", dict(state=state, finished=now(), message=result.get("msg", "")))
         except Exception:
             logging.exception("Reconstruction failed")

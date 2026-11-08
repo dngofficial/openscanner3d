@@ -403,6 +403,43 @@ def y_up(mesh):
     return out
 
 
+def load_scene(workspace: Path) -> "Scene":
+    """COLMAP run -> Scene (cameras, table frame, object search box)."""
+    sparse, dense = workspace / "sparse" / "0", workspace / "dense" / "0"
+    cameras, model_images = read_cameras(sparse / "cameras.bin"), read_images(sparse / "images.bin")
+    if len(model_images) < 6:
+        raise ValueError(f"Only {len(model_images)} photos registered; at least 6 are needed")
+    points = read_points3d(sparse / "points3D.bin") if (sparse / "points3D.bin").is_file() else np.empty((0, 3))
+    if (dense / "fused.ply").is_file():
+        import trimesh
+        try:
+            fused = np.asarray(trimesh.load(dense / "fused.ply").vertices, dtype=float).reshape(-1, 3)
+        except Exception:  # Empty or truncated PLY when dense stereo found nothing.
+            fused = np.empty((0, 3))
+        fused = fused[np.isfinite(fused).all(1)]
+        if len(fused) >= len(points):  # Dense stereo can come out sparser than SfM on plain scenes.
+            points = fused
+    if len(points) < 50:
+        raise ValueError(f"Only {len(points)} 3D points reconstructed; too few to find the table")
+    return Scene(cameras, model_images, points)
+
+
+def camera_angles(scene) -> dict:
+    """Measured view angles per registered photo, in the phone checklist's terms.
+
+    pitch: degrees the camera looks below the horizon (table plane). azimuth: degrees walked around the
+    object since the first photo, positive = walked left while facing it (matches the phone's heading).
+    """
+    angles, first = {}, None
+    for image in sorted(scene.images, key=lambda im: im["name"]):
+        direction = image["R"].T @ np.array([0, 0, 1.0])
+        pitch = float(np.degrees(-np.arcsin(np.clip(direction @ scene.up, -1, 1))))
+        heading = -float(np.degrees(np.arctan2(direction @ scene.y, direction @ scene.x)))  # Compass: clockwise.
+        first = heading if first is None else first
+        angles[image["name"]] = (round(((heading - first + 180) % 360) - 180, 1), round(pitch, 1))
+    return angles
+
+
 def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object", masks_dir: Path | None = None,
                        target_triangles=5000, texture_size=2048, height_cm=None, segment=None,
                        mask_cache: Path | None = None, previews: Path | None = None, stage=None) -> dict:
@@ -420,23 +457,8 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     if height_cm is not None and (not np.isfinite(height_cm) or height_cm <= 0):
         raise ValueError("height_cm must be positive and finite")
     output.mkdir(parents=True, exist_ok=True)
-    sparse, dense = workspace / "sparse" / "0", workspace / "dense" / "0"
-    cameras, model_images = read_cameras(sparse / "cameras.bin"), read_images(sparse / "images.bin")
-    if len(model_images) < 6:
-        raise ValueError(f"Only {len(model_images)} photos registered; at least 6 are needed")
-    points = read_points3d(sparse / "points3D.bin") if (sparse / "points3D.bin").is_file() else np.empty((0, 3))
-    if (dense / "fused.ply").is_file():
-        import trimesh
-        try:
-            fused = np.asarray(trimesh.load(dense / "fused.ply").vertices, dtype=float).reshape(-1, 3)
-        except Exception:  # Empty or truncated PLY when dense stereo found nothing.
-            fused = np.empty((0, 3))
-        fused = fused[np.isfinite(fused).all(1)]
-        if len(fused) >= len(points):  # Dense stereo can come out sparser than SfM on plain scenes.
-            points = fused
-    if len(points) < 50:
-        raise ValueError(f"Only {len(points)} 3D points reconstructed; too few to find the table")
-    scene = Scene(cameras, model_images, points)
+    scene = load_scene(workspace)
+    model_images = scene.images
     photos = {image["name"]: cv2.imread(str(images / image["name"])) for image in model_images}
     missing = [name for name, photo in photos.items() if photo is None]
     if missing:

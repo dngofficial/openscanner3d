@@ -66,6 +66,32 @@ def describe_object(info: dict) -> str:
     return message
 
 
+def fill_angles(scan: Path, run: Path) -> int:
+    """Measured azimuth/pitch for photos that have none (gallery uploads, folders run through scripts.reconstruct)."""
+    from . import coverage
+    from .silhouette import camera_angles, load_scene
+    try:
+        poses = json.loads((scan / "poses.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    if all(pose.get("azimuth") is not None for pose in poses):
+        return 0
+    angles = camera_angles(load_scene(run))
+    filled = 0
+    for pose in poses:
+        if pose.get("azimuth") is None and pose["name"] in angles:
+            azimuth, pitch = angles[pose["name"]]
+            ring = coverage.ring_of(pitch)
+            pose.update(azimuth=azimuth, pitch=pitch, ring=ring, sector=coverage.sector_of(azimuth) if ring is not None else None,
+                        angle_source="colmap")
+            filled += 1
+    if filled:
+        temporary = scan / "poses.json.tmp"
+        temporary.write_text(json.dumps(poses, indent=2), encoding="utf-8")
+        temporary.replace(scan / "poses.json")
+    return filled
+
+
 def newest_run(scan: Path) -> Path | None:
     try:
         run = scan / "runs" / json.loads((scan / "run.json").read_text(encoding="utf-8"))["run"]
