@@ -2,6 +2,8 @@
 
 Target reported by the user: RTX 3070 Ti Laptop, 8 GB VRAM, 32 GB RAM. This target has not yet run this version's real reconstruction test.
 
+**Installing from scratch, or after local files were deleted?** Follow [Complete setup on Windows](../README.md#complete-setup-on-windows-from-scratch) in the README first. It covers Python, SAM 2, COLMAP, OpenMVS, config and doctor, in order. This file adds detail and the acceptance checklist for the first real GPU run.
+
 ## 1. Verify capture without GPU dependencies
 
 Install Python 3.11 x64, then from the repository root:

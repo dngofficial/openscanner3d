@@ -2,16 +2,187 @@
 
 Builds on the existing FastAPI + browser capture prototype. `PLAN.md` remains the scope authority; `docs/implementation_plan.md` is long-term background.
 
-## Windows quick start
+## Complete setup on Windows (from scratch)
 
-Install Python **3.11 x64**, clone/pull this repository, and run from its root:
+Use these steps on a new machine, or after local files were deleted. Git does not store the files you have to recreate: `.venv/`, `.venv-sam2/`, `models/sam2.1_hiera_tiny.pt`, `config.local.toml`, `data/` and `scans/`. Scans are not recoverable from Git, so keep your own copy of any reviewed ZIPs you need.
+
+Run every command in **PowerShell**, one at a time. To open PowerShell in a folder, right-click inside it in File Explorer and choose **Open in Terminal**. Steps marked **GPU laptop** are only for the reconstruction machine (RTX 3070 Ti); the capture laptop can skip them.
+
+### 1. Install the prerequisites
+
+- **Python 3.11 x64** from python.org, with the "py launcher" option ticked. Check: `py -3.11 --version`.
+- **Git for Windows.** Check: `git --version`.
+- **Camo Studio** on the laptop and **Camo Camera** on the phone (see [PHONE_SETUP.md](docs/PHONE_SETUP.md)).
+- **GPU laptop:** a current NVIDIA driver. `nvidia-smi` must list the GPU and show "CUDA Version" 12.4 or higher.
+
+### 2. Get this branch into its own folder
+
+A separate clone does not touch any other branch or folder you already have:
+
+```powershell
+git clone https://github.com/dngofficial/openscanner3d.git openscanner3d-review
+```
+```powershell
+cd openscanner3d-review
+```
+```powershell
+git checkout codex/controlled-capture-review
+```
+
+Run every remaining command from inside `openscanner3d-review`.
+
+### 3. Base setup (both laptops)
 
 ```powershell
 ./scripts/setup.ps1
-./scripts/launch.ps1 -Mode capture
 ```
 
-If the Python launcher is unavailable, pass your installed interpreter: `./scripts/setup.ps1 -Python 'C:\actual\path\python.exe'`. Setup creates `.venv`, installs the constrained dependencies, runs CPU tests, and saves `data/doctor.json`. It does not install COLMAP, Blender, CUDA, or model weights. The existing local config is never overwritten.
+This step:
+- creates `.venv` and installs the pinned dependencies;
+- copies `config.example.toml` to `config.local.toml` (only if it is missing);
+- runs the CPU tests;
+- writes `data/doctor.json`.
+
+It does not install COLMAP, OpenMVS, Blender, CUDA or model weights. If PowerShell says scripts are disabled, run `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1` instead. If `py` is missing, pass the interpreter: `./scripts/setup.ps1 -Python 'C:\path\to\python.exe'`.
+
+### 4. SAM 2 for AI object selection (both laptops)
+
+SAM 2 gets its own environment, because it needs PyTorch and the app does not. Create it:
+
+```powershell
+py -3.11 -m venv .venv-sam2
+```
+
+Install PyTorch. **GPU laptop:**
+```powershell
+.venv-sam2/Scripts/python.exe -m pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1 torchvision==0.20.1 "setuptools>=61" wheel
+```
+**Laptop without an NVIDIA GPU:**
+```powershell
+.venv-sam2/Scripts/python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchvision==0.20.1 "setuptools>=61" wheel
+```
+
+Then install SAM 2 from Meta's repository (pinned commit) and download the checkpoint. Do not `pip install sam2` from PyPI; that package is not Meta's.
+```powershell
+$env:SAM2_BUILD_CUDA='0'; .venv-sam2/Scripts/python.exe -m pip install --no-build-isolation "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+```
+```powershell
+Invoke-WebRequest https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt -OutFile models/sam2.1_hiera_tiny.pt
+```
+```powershell
+(Get-FileHash models/sam2.1_hiera_tiny.pt).Hash
+```
+The hash must be `7402E0D864FA82708A20FBD15BC84245C2F26DFF0EB43A4B5B93452DEB34BE69`.
+
+To confirm the install, run the following. It should print `True` on the GPU laptop and `False` on a CPU-only one:
+```powershell
+.venv-sam2/Scripts/python.exe -c "import torch, sam2; print(torch.__version__, torch.cuda.is_available())"
+```
+
+The CPU route is verified. The CUDA route has not yet been run on a real GPU. More detail is in [models/README.md](models/README.md).
+
+### 5. Reconstruction tools (GPU laptop)
+
+- **COLMAP:** download the Windows **CUDA** zip from <https://github.com/colmap/colmap/releases> and extract it, for example to `C:\Tools\COLMAP`. The CUDA build is required; without it, COLMAP produces camera positions but no dense mesh.
+- **OpenMVS** (UV texture): get a Windows build from <https://github.com/cdcseacave/openMVS/releases> and note the folder that contains `InterfaceCOLMAP.exe` and `TextureMesh.exe`. It is AGPL-3.0, so do not redistribute it with the project without checking the licence.
+- **Blender** (optional): used for the textured GLB export when found; otherwise trimesh is used.
+
+### 6. Configure `config.local.toml`
+
+Open it with `notepad config.local.toml`. Keep Windows paths in single quotes.
+
+**GPU laptop** (replace the tool paths with the real ones):
+```toml
+mode = "reconstruct"
+colmap = 'C:\Tools\COLMAP\COLMAP.bat'
+openmvs_bin = 'C:\Tools\OpenMVS\bin'
+quality = "medium"
+segmentation_python = '.venv-sam2/Scripts/python.exe'
+sam2_checkpoint = 'models/sam2.1_hiera_tiny.pt'
+segmentation_device = "auto"
+```
+
+**Capture laptop:**
+```toml
+mode = "capture"
+segmentation_python = '.venv-sam2/Scripts/python.exe'
+sam2_checkpoint = 'models/sam2.1_hiera_tiny.pt'
+segmentation_device = "cpu"
+```
+
+Add `feature_mask_regions = []` only for photos without the Camo watermark. Every option is explained in `config.example.toml`.
+
+### 7. Check with doctor
+
+GPU laptop:
+```powershell
+.venv/Scripts/python.exe -m scripts.doctor --require-reconstruction --output data/partner-doctor.json
+```
+Capture laptop:
+```powershell
+.venv/Scripts/python.exe -m scripts.doctor --output data/doctor.json
+```
+
+In the JSON file it writes, check:
+
+| Field | Expected |
+| --- | --- |
+| `capture_ready` | `true` (both laptops) |
+| `segmentation.ok` | `true`; `runtime` ends in `cuda` on the GPU laptop, `cpu` otherwise |
+| `tools.colmap.ok`, `tools.colmap.mask_path_supported` | `true` (GPU laptop) |
+| `texturing.ok` | `true` (GPU laptop, when OpenMVS is wanted) |
+
+If a field is `false`, its `problem` or `output` text names the fix. The report contains local paths, so share it deliberately and never commit it.
+
+### 8. Run the app
+
+```powershell
+./scripts/launch.ps1 -Mode reconstruct
+```
+On the capture laptop, use `-Mode capture` instead.
+
+1. Open **<http://localhost:8000> on the same laptop**. Start Camo, press **Start camera**, and choose Camo if it isn't picked automatically.
+2. Choose **How are you capturing?** before saving anything:
+   - **Object still · I move around it**
+   - **I turn the object by hand**
+3. **Start scan**, take the photos, then **Finish & review** and untick bad frames.
+4. Click a photo, click the object's top and sides, and shift-click your hand or the table. Then **Run AI selection** and check every mask.
+5. **Confirm**. On the GPU laptop this starts the background reconstruction; **Results → View** opens the 3D models. On the capture laptop it produces `reviewed-images.zip` to send to the GPU laptop.
+
+On the GPU laptop, to process a ZIP from the capture laptop: stop the app (Ctrl+C), extract the ZIP, then run
+```powershell
+.venv/Scripts/python.exe -m scripts.reconstruct 'C:\path\to\extracted\images'
+```
+The ZIP's `object_masks/` folder is used automatically.
+
+Keep the PowerShell window running the app open; Ctrl+C stops it. Only one app can use port 8000 at a time.
+
+### 9. Update later
+
+```powershell
+git pull
+```
+```powershell
+./scripts/setup.ps1
+```
+Setup keeps the existing `config.local.toml`, `.venv-sam2` and the checkpoint.
+
+### Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| "running scripts is disabled" | `powershell -ExecutionPolicy Bypass -File .\scripts\launch.ps1 -Mode reconstruct` (same pattern for setup) |
+| "error while attempting to bind on address ('127.0.0.1', 8000)" | Another app window is still running. Close it, or find it with `Get-NetTCPConnection -LocalPort 8000` |
+| `py` or `git` not found | Install it, then open a new PowerShell window |
+| `No module named 'setuptools'` while installing SAM 2 | Rerun the PyTorch install command from step 4 (it includes setuptools), then the SAM 2 command |
+| "AI selection unavailable: checkpoint not found" | Check that `models/sam2.1_hiera_tiny.pt` exists and that `sam2_checkpoint` matches it |
+| SAM 2 runtime reports `cpu` on the GPU laptop | Update the NVIDIA driver, then reinstall PyTorch with the `cu124` command |
+| "No dense Poisson mesh was produced" | Make sure the COLMAP **CUDA** build is configured, then read `scans/<id>/colmap.log` |
+| No Camo in the camera list | Confirm the preview in Camo Studio first, then press **Refresh cameras** |
+
+The acceptance checklist and what to send back after a GPU run are in [docs/PARTNER_SETUP.md](docs/PARTNER_SETUP.md).
+
+## Using the scanner
 
 Open **http://localhost:8000 on the laptop**, then press **Start camera**. Camo is preferred when available; the camera selector still supports other webcams. Refresh cameras after connecting a device. If permission is denied, allow camera access for this site and retry. Photo import works without a camera.
 
@@ -72,16 +243,11 @@ For photos already on disk, choose **Import photos**. JPEG, PNG, and WebP are ac
 
 Target: **Windows, RTX 3070 Ti Laptop / 8 GB VRAM, 32 GB RAM**. The development machine currently has usable integrated graphics only.
 
-Follow [PARTNER_SETUP.md](docs/PARTNER_SETUP.md). After the CPU setup works, configure the actual COLMAP executable in ignored `config.local.toml`, run doctor, and explicitly enable reconstruction. The existing COLMAP pipeline now has an executable/CLI check, one active reconstruction per server process, a 30-minute default timeout, logs, and a fresh workspace for every attempt. Initial quality is `low`; fitting the target GPU remains to be measured.
-
-```powershell
-.venv/Scripts/python.exe -m scripts.doctor --require-reconstruction --output data/partner-doctor.json
-./scripts/launch.ps1 -Mode reconstruct
-```
+Install and configure it with [Complete setup on Windows](#complete-setup-on-windows-from-scratch), then follow the acceptance checklist in [PARTNER_SETUP.md](docs/PARTNER_SETUP.md). The COLMAP pipeline checks the executable's options, runs one reconstruction at a time with a 30-minute default timeout, keeps logs, and uses a fresh workspace for every attempt. Whether `quality = "medium"` fits in 8 GB of VRAM remains to be measured; drop to `low` if dense reconstruction runs out of memory.
 
 Camo's free tier burns a watermark into the bottom-right of every frame. Because it never moves, it produces zero-motion matches that conflict with real camera motion. By default, `feature_mask_regions` excludes that corner from live SIFT tracking. The reconstruction adapter also writes one COLMAP mask per image (`runs/<attempt>/masks/<image>.png`) and passes `--mask_path`. Reconstruction refuses to start if the installed COLMAP lacks that option, and doctor reports `mask_path_supported`. On the reviewed 77-frame Camo set, masking cut near-zero-motion SIFT matches between frames four apart from 87 to 7. That measures feature cleanup, not reconstruction success. Masks affect feature extraction only, not dense stereo. Set `feature_mask_regions = []` for photos without a watermark.
 
-Tool discovery is not proof of successful reconstruction. The adapter produces an **experimental mesh** with vertex colours, plus a UV-textured GLB when OpenMVS is installed. No real reconstruction, isolation or texture has yet been produced by this code, since the development laptop has no COLMAP or CUDA GPU; that is the partner laptop's acceptance run. There is no quad remeshing and no hole filling. Blender discovery in doctor is informational; the current export uses trimesh.
+Tool discovery is not proof of successful reconstruction. The adapter produces an **experimental mesh** with vertex colours, plus a UV-textured GLB when OpenMVS is installed. No real reconstruction, isolation or texture has yet been produced by this code, since the development laptop has no COLMAP or CUDA GPU; that is the partner laptop's acceptance run. There is no quad remeshing and no hole filling. Blender, when found, converts the textured OBJ to GLB; otherwise trimesh does.
 
 ## Storage and configuration
 
