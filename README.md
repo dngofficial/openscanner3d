@@ -34,7 +34,7 @@ Run every command in **PowerShell**, from the repository folder. To open PowerSh
    .venv/Scripts/python.exe -m scripts.make_cert
    ```
    Then install `certs/phone-root-ca.pem` on the phone as described in [docs/PHONE_SETUP.md](docs/PHONE_SETUP.md).
-5. **Config:** open `config.local.toml` (`notepad config.local.toml`) and set `lan = true`.
+5. **Config:** open `config.local.toml` (`notepad config.local.toml`) and change the existing entry to `lan = true`. Keep each key only once; appending duplicate settings makes the TOML invalid.
 6. **Check** that `phone_connection.ok` is `true` in the output:
    ```powershell
    .venv/Scripts/python.exe -m scripts.doctor

@@ -13,6 +13,9 @@ Follow [Complete setup on Windows](../README.md#complete-setup-on-windows-from-s
 
 In `config.local.toml`, use single quotes for Windows paths, and only paths you have checked exist:
 
+Edit the existing entries instead of appending another copy. Each key, including `quality`,
+`mode` and `lan`, must appear only once. A duplicate is invalid even when both values match.
+
 ```toml
 mode = "reconstruct"
 colmap = 'C:\Tools\COLMAP\COLMAP.bat'

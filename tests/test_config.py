@@ -13,6 +13,13 @@ from backend.app.images import normalize_photo
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_duplicate_keys_name_the_config_file_and_line(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "config.local.toml"
+            path.write_text('quality = "medium"\nquality = "medium"\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"config\.local\.toml: Cannot overwrite a value.*line 2"):
+                load_settings(path)
+
     def test_safe_default_and_invalid_settings(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {}, clear=True):
             path = Path(root) / "config.toml"

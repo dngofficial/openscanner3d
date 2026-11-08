@@ -38,7 +38,10 @@ DETAIL = {"low": (1000, 1024), "standard": (5000, 2048), "high": (20000, 4096)}
 
 def load_settings(path: Path | None = None) -> Settings:
     path = path or ROOT / "config.local.toml"
-    values = tomllib.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+    try:
+        values = tomllib.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"Invalid TOML in {path.name}: {error}") from error
     if os.environ.get("SCANNER_MODE"):
         values["mode"] = os.environ["SCANNER_MODE"]
     unknown = set(values) - set(Settings.__dataclass_fields__)

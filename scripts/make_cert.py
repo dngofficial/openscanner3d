@@ -36,7 +36,11 @@ def find_mkcert(explicit: str | None = None) -> str | None:
 
 
 def run(command: list[str]) -> str:
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    # Browser setup needs the system store. Avoid Java's protected cacerts when JAVA_HOME is set.
+    environment = os.environ.copy()
+    environment["TRUST_STORES"] = "system"
+    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=120, env=environment)
     if result.returncode:
         sys.exit(f"{' '.join(command[:2])} failed:\n{result.stdout}{result.stderr}")
     return result.stdout.strip()
@@ -46,7 +50,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mkcert", help="Path to mkcert.exe if it is not found automatically.")
     args = parser.parse_args()
-    settings = load_settings()
+    try:
+        settings = load_settings()
+    except (ValueError, TypeError, OSError) as error:
+        parser.error(f"Configuration error: {error}")
     mkcert = find_mkcert(args.mkcert)
     if not mkcert:
         sys.exit(r"mkcert not found. Install it (winget install FiloSottile.mkcert) or pass --mkcert C:\path\to\mkcert.exe.")
