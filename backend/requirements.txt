@@ -5,3 +5,4 @@ numpy
 opencv-python
 trimesh
 Pillow
+segno

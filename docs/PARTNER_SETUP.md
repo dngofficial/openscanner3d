@@ -11,7 +11,7 @@ Install Python 3.11 x64, then from the repository root:
 ./scripts/launch.ps1 -Mode capture
 ```
 
-Use the existing Camo workflow at `http://localhost:8000`, or import a consistent photo set. Finish at least 12 views and confirm files exist in `scans/<id>/images/`. The application reports capture-only mode and does not claim to have created a model.
+Set up the phone connection as in [PHONE_SETUP.md](PHONE_SETUP.md), run a guided scan from the phone, and tap Finish. Confirm the scan appears on `https://localhost:8443` with its photos and `scan.zip`. In capture mode the application does not claim to have created a model.
 
 Setup installs constrained Python dependencies and runs CPU checks. It preserves existing config and does not download inference weights or GPU tools. Internet is needed for the initial dependency installation.
 
@@ -54,8 +54,8 @@ The adapter checks the installed `automatic_reconstructor -h` options, explicitl
 - [ ] Run a real scan and inspect `colmap.log`, elapsed time, and peak VRAM.
 - [ ] Open the resulting `mesh.glb` independently in Blender.
 - [ ] Record missing surfaces, background contamination, material appearance, and scale limitations.
-- [ ] Repeat with the Samsung/Camo input set.
-- [ ] Repeat after disconnecting internet while retaining any needed local Camo connection.
+- [ ] Repeat with a guided scan from the Samsung phone.
+- [ ] Repeat after disconnecting the internet while keeping the phone and laptop on the same Wi-Fi.
 
 The current adapter exports a triangle mesh using trimesh. It does **not** provide UV texturing, clean quad topology, SAM 2 isolation, or a browser 3D viewer. These are remaining implementation gates in `PLAN.md`; a successful experimental GLB is useful evidence, not completion of the final product.
 

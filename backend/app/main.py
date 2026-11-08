@@ -1,344 +1,314 @@
-"""Live 3D scan guide. Run: python -m backend.app.main -> http://localhost:8000
-Pipeline: JPEG frames -> changed-view photo capture + independent SIFT/PnP live map.
-On Finish: keyframes go to COLMAP (dense + Poisson mesh) -> scan/mesh.obj + scan/mesh.glb
+"""Local object scanner: the phone captures guided photos directly; the laptop stores and processes them.
+
+Run: python -m backend.app.main
+  lan = false: http://localhost:8000 on the laptop only (photo checks, dashboard, reconstruction).
+  lan = true:  https://<laptop LAN address>:8443 for the phone (camera and motion sensors need HTTPS).
 """
-import asyncio, math, uuid, logging, time
-from PIL import Image, UnidentifiedImageError
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
+import json
+import logging
+import os
 from pathlib import Path
-import cv2, numpy as np, uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import FileResponse
-from .config import load_settings, resolve_tool
-from .reconstruction import reconstruct
-from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
+import re
+import sys
+import threading
+import uuid
+import zipfile
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from PIL import Image, UnidentifiedImageError
+import uvicorn
+
+from . import coverage, network, quality
+from .config import load_settings, project_path, resolve_tool
+from .images import MAX_UPLOAD_BYTES, decode_jpeg
+from .reconstruction import _heavy_job, reconstruct
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
 SETTINGS = load_settings()
-AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
-KF_DEG, MIN_BLUR = 6, 25             # new keyframe every 6 deg of orbit; Laplacian var floor
-bf = cv2.BFMatcher(cv2.NORM_L2)
+SCAN_ID = r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}"
+PHOTO = r"kf_[0-9]{4}\.jpg"
+MIN_PHOTOS = 12
+PAGES = {"/": "index.html", "/phone": "phone.html"}
+MODULES = {"guidance.mjs"}
+DOWNLOADS = {"scan.zip", "mesh.glb", "mesh.obj", "colmap.log"}
+_write_lock = threading.Lock()
 app = FastAPI()
 
 
-def match(a, b):
-    return [m[0] for m in bf.knnMatch(a, b, k=2) if len(m) == 2 and m[0].distance < .75 * m[1].distance]
+# ---- access control ------------------------------------------------------
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    kind = network.client_kind(request.client.host if request.client else None)
+    if kind == "outside":
+        return PlainTextResponse("This scanner only answers devices on the local network.", status_code=403)
+    if request.method not in ("GET", "HEAD"):
+        origin = request.headers.get("origin")
+        if origin and origin not in (f"https://{request.headers.get('host')}", f"http://{request.headers.get('host')}"):
+            return PlainTextResponse("Cross-site request refused.", status_code=403)
+    if kind == "lan":
+        offered = request.query_params.get("key")
+        if network.key_matches(offered):
+            # Move the key from the URL into a cookie, then reload without it.
+            response = RedirectResponse(request.url.remove_query_params("key"), status_code=303)
+            response.set_cookie(network.COOKIE, network.ACCESS_KEY, httponly=True, secure=True, samesite="strict")
+            return response
+        if not network.key_matches(request.cookies.get(network.COOKIE)):
+            return PlainTextResponse("Open the link or scan the QR code shown on the laptop's scanner page.", status_code=401)
+    return await call_next(request)
 
 
-class Scan:
-    def __init__(s):
-        s.id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
-        s.out = SCANS / s.id
-        s.img = s.out / "images"
-        s.sift = cv2.SIFT_create(nfeatures=4000, contrastThreshold=0.015, edgeThreshold=15)
-        s.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        s.reset()
-
-    def reset(s):
-        s.img.mkdir(parents=True, exist_ok=True)
-        s.overlay = None; s.previous_features = None
-        s.import_next = False; s.frame_shape = None
-        s.photos = []; s.last_photo = None; s.force_capture = False; s.capture_note = "Waiting for a usable frame"
-        s.K = None; s.kfs = []; s.pts = np.zeros((0, 3)); s.ptd = np.zeros((0, 128), np.float32)
-        s.bins = np.zeros((len(EL_EDGES) + 1, AZ), int); s.cur = None; s.size = 0
-
-    # ---- geometry helpers -------------------------------------------------
-    def center(s):
-        return np.median(s.pts, 0) if len(s.pts) >= 30 else None
-
-    def angles(s, R, t):
-        c = s.center()
-        if c is None: return None
-        v = (-R.T @ t) - c; v /= np.linalg.norm(v) + 1e-9
-        # world "up" = -y of the first camera (y points down in OpenCV)
-        return math.atan2(v[0], v[2]), math.degrees(math.asin(np.clip(-v[1], -1, 1)))
-
-    def bin_of(s, az, el):
-        return sum(el >= e for e in EL_EDGES), int((az + math.pi) / (2 * math.pi) * AZ) % AZ
-
-    def tri(s, ka, R, t, pa, pb, db, mask=None):
-        Pa = s.K @ np.hstack([ka["R"], ka["t"][:, None]]); Pb = s.K @ np.hstack([R, t[:, None]])
-        X = cv2.triangulatePoints(Pa, Pb, pa.T.astype(float), pb.T.astype(float)); 
-        with np.errstate(divide="ignore", invalid="ignore"):
-            X = (X[:3] / X[3]).T
-        ok = np.ones(len(X), bool) if mask is None else mask.astype(bool)
-        ok &= np.isfinite(X).all(axis=1)
-        for Rk, tk, p in ((ka["R"], ka["t"], pa), (R, t, pb)):
-            c = X @ Rk.T + tk; ok &= c[:, 2] > 0
-            pr = c @ s.K.T; ok &= np.linalg.norm(pr[:, :2] / pr[:, 2:3] - p, axis=1) < 2
-        s.pts = np.vstack([s.pts, X[ok]]); s.ptd = np.vstack([s.ptd, db[ok]])
-
-    def save_view(s, xy, d, jpg, gray):
-        now = time.monotonic()
-        forced = s.force_capture
-        s.force_capture = False
-        if len(s.photos) >= SETTINGS.max_photos:
-            s.capture_note = f"{SETTINGS.max_photos}-photo limit reached; finish this scan."
-            return
-        if s.last_photo is not None and not forced:
-            if now - s.last_photo["time"] < .7:
-                s.capture_note = "Waiting between captures"
-                return
-            matches = match(s.last_photo["d"], d)
-            if len(matches) >= 15:
-                pa = s.last_photo["xy"][[m.queryIdx for m in matches]]
-                pb = xy[[m.trainIdx for m in matches]]
-                motion = float(np.median(np.linalg.norm(pb - pa, axis=1)))
-                if motion < 12:
-                    s.capture_note = f"Move the camera a little farther ({motion:.1f}/12 px change)"
-                    return
-            else:
-                # A changed viewpoint can lose overlap; save it for offline matching.
-                thumb = cv2.resize(gray, (160, 120)).astype(float)
-                difference = np.mean(np.abs(thumb - s.last_photo["thumb"]))
-                if difference < 10:
-                    s.capture_note = "View has not changed enough"
-                    return
-        name = f"kf_{len(s.photos):04d}.jpg"
-        (s.img / name).write_bytes(jpg)
-        s.photos.append(name)
-        s.last_photo = dict(xy=xy, d=d, time=now,
-                            thumb=cv2.resize(gray, (160, 120)).astype(float))
-        s.capture_note = f"Saved photo {len(s.photos)}" + (" manually" if forced else "")
-
-    def add_kf(s, R, t, xy, d, jpg):
-        s.kfs.append(dict(R=R, t=t, xy=xy, d=d, c=-R.T @ t))
-        a = s.angles(R, t)
-        if a: s.bins[s.bin_of(*a)] += 1
-
-    def visual_features(s, xy, d, width, height):
-        points = xy[np.linspace(0, len(xy) - 1, min(250, len(xy)), dtype=int)] if len(xy) else xy
-        box = None
-        if len(xy) >= 10:
-            lo, hi = np.percentile(xy, [5, 95], axis=0)
-            box = [*lo.tolist(), *hi.tolist()]
-        trails = []
-        if d is not None and s.previous_features is not None:
-            old_xy, old_d = s.previous_features
-            pairs = match(old_d, d)
-            for m in pairs[:80]:
-                trails.append([*old_xy[m.queryIdx].tolist(), *xy[m.trainIdx].tolist()])
-        s.previous_features = (xy.copy(), d.copy()) if d is not None else None
-        s.overlay = dict(width=width, height=height, points=np.round(points, 1).tolist(),
-                         box=box, trails=np.round(trails, 1).tolist(), inliers=[])
-
-    # ---- feedback ---------------------------------------------------------
-    def fb(s, msg, lvl="warn", **kw):
-        return dict(msg=msg, lvl=lvl, kfs=len(s.photos), tracked_views=len(s.kfs), capture=s.capture_note,
-                    tracking="Mapping" if len(s.pts) else "Initializing", pts=len(s.pts), bins=s.bins.ravel().tolist(),
-                    cur=s.cur, size=round(s.size, 2), overlay=s.overlay, **kw)
-
-    def guide(s, R, t):
-        a = s.angles(R, t)
-        if a is None: return s.fb("Mapping started. Keep moving slowly sideways.", "ok")
-        s.cur = [a[0], a[1]]
-        done = (s.bins > 0).mean()
-        if done >= .8: return s.fb("Estimated tracking coverage reached. Review your photos before finishing.", "ok")
-        cr, cc = s.bin_of(*a)
-        best = min(((r, c) for r, c in np.argwhere(s.bins == 0)),
-                   key=lambda rc: min(abs(rc[1] - cc), AZ - abs(rc[1] - cc)) + 2 * abs(rc[0] - cr))
-        tr, tc = best
-        d_az = ((tc - cc + AZ / 2) % AZ - AZ / 2) * 360 / AZ    # + = camera moves to its left (from start view)
-        parts = []
-        if abs(d_az) >= 15: parts.append(f"orbit {'left' if d_az > 0 else 'right'} about {abs(int(d_az))}°")
-        if tr > cr: parts.append("raise the camera")
-        if tr < cr: parts.append("lower the camera")
-        return s.fb(" and ".join(parts).capitalize() + f". {int(done * 100)}% covered." if parts
-                    else "Hold here and tilt slightly.", "ok")
-
-    def distance(s, R, t, W, H):
-        c = s.center()
-        if c is None: return None
-        near = s.pts[np.linalg.norm(s.pts - c, axis=1) < np.percentile(np.linalg.norm(s.pts - c, axis=1), 70)]
-        cam = near @ R.T + t; cam = cam[cam[:, 2] > 0]
-        if len(cam) < 20: return None
-        p = cam @ s.K.T; p = p[:, :2] / p[:, 2:3]
-        lo, hi = np.percentile(p, 10, 0), np.percentile(p, 90, 0)
-        s.size = max((hi[0] - lo[0]) / W, (hi[1] - lo[1]) / H)
-        return "Move closer. The object is small in frame." if s.size < .3 else \
-               "Move back. The object is filling the frame." if s.size > .8 else None
-
-    # ---- per frame --------------------------------------------------------
-    def decode(s, jpg):
-        full, shape = decode_jpeg(jpg, s.frame_shape)
-        s.frame_shape = shape
-        return full
-
-    def import_photo(s, jpg):
-        s.overlay = None
-        try:
-            normalized, suffix = normalize_photo(jpg)
-            s.decode(normalized)
-        except (ValueError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
-            return s.fb(str(error), "bad", accepted=False)
-        if len(s.photos) >= SETTINGS.max_photos:
-            return s.fb("Photo limit reached; finish this scan.", "warn", accepted=False)
-        name = f"kf_{len(s.photos):04d}.jpg"
-        originals = s.out / "originals"
-        originals.mkdir(exist_ok=True)
-        (originals / f"kf_{len(s.photos):04d}{suffix}").write_bytes(jpg)
-        (s.img / name).write_bytes(normalized)
-        s.photos.append(name)
-        s.last_photo = None
-        s.capture_note = f"Imported photo {len(s.photos)}"
-        return s.fb(s.capture_note, "ok", accepted=True)
-
-    def process(s, jpg):
-        s.overlay = None
-        try:
-            full = s.decode(jpg)
-        except (ValueError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
-            return s.fb(str(error), "bad")
-        img = cv2.resize(full, (960, int(960 * full.shape[0] / full.shape[1])))
-        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY); H, W = g.shape
-        if s.K is None: s.K = np.array([[.85 * W, 0, W / 2], [0, .85 * W, H / 2], [0, 0, 1]])
-        blur = round(float(cv2.Laplacian(g, cv2.CV_64F).var()), 1)
-        brightness, contrast = round(float(g.mean()), 1), round(float(g.std()), 1)
-        enhanced = s.clahe.apply(g)
-        kp, d = s.sift.detectAndCompute(enhanced, None)
-        xy = np.float32([k.pt for k in kp]).reshape(-1, 2)
-        s.visual_features(xy, d, W, H)
-        info = dict(blur=blur, feats=len(kp), brightness=brightness, contrast=contrast)
-        if d is None or len(kp) < 40:
-            if brightness < 35:
-                msg = f"Frame is dark ({brightness}/255); increase illumination or exposure."
-            elif brightness > 225:
-                msg = f"Frame is overexposed ({brightness}/255); reduce exposure or glare."
-            else:
-                msg = f"Only {len(kp)} trackable features (need 40). Focus on a detailed matte object; include nearby textured surroundings."
-            return s.fb(msg, "warn", **info)
-        # Sharpness alone is not a reliable rejection test across cameras.
-        info["quality"] = "Soft frame; hold steady or check focus." if blur < MIN_BLUR else "Frame usable"
-        s.save_view(xy, d, jpg, g)
-
-        if not s.kfs:
-            s.add_kf(np.eye(3), np.zeros(3), xy, d, jpg)
-            return s.fb("First view saved. Slide the camera sideways, slowly.", "ok", **info)
-
-        if len(s.pts) == 0:                                   # two-view initialisation
-            k0 = s.kfs[0]; m = match(k0["d"], d)
-            if len(m) < 40: return s.fb("Lost the first view. Return to where you started.", "bad", **info)
-            p0 = k0["xy"][[x.queryIdx for x in m]]; p1 = xy[[x.trainIdx for x in m]]
-            if np.median(np.linalg.norm(p1 - p0, axis=1)) < 12: return s.fb("Photos are being saved. Move sideways to initialize live tracking.", "warn", **info)
-            E, mk = cv2.findEssentialMat(p0, p1, s.K, cv2.RANSAC, .999, 1.0)
-            if E is None or E.shape != (3, 3): return s.fb("Could not initialise. Try a more textured view.", "warn", **info)
-            _, R, t, mk = cv2.recoverPose(E, p0, p1, s.K, mask=mk)
-            s.tri(k0, R, t.ravel(), p0, p1, d[[x.trainIdx for x in m]], mk.ravel())
-            if len(s.pts) < 30: s.pts = s.pts[:0]; s.ptd = s.ptd[:0]; return s.fb("Not enough parallax. Move further sideways.", "warn", **info)
-            s.add_kf(R, t.ravel(), xy, d, jpg)
-            return s.fb("Map initialised. Keep orbiting the object.", "ok", **info)
-
-        dm = match(s.ptd, d); lost = s.fb("Tracking lost. Go back to the last good position and slow down.", "bad", **info)
-        if len(dm) < 30: return lost
-        ok, rv, tv, inl = cv2.solvePnPRansac(s.pts[[x.queryIdx for x in dm]], xy[[x.trainIdx for x in dm]],
-                                             s.K, None, reprojectionError=4, iterationsCount=200)
-        if not ok or inl is None or len(inl) < 25: return lost
-        s.overlay["inliers"] = np.round(xy[[dm[int(i)].trainIdx for i in inl.ravel()]][:150], 1).tolist()
-        R, t = cv2.Rodrigues(rv)[0], tv.ravel(); a = s.angles(R, t)
-
-        if a:                                                  # new keyframe if far enough from all others
-            c = s.center(); v = (-R.T @ t) - c
-            def sep(k):
-                w = k["c"] - c; return math.degrees(math.acos(np.clip(v @ w / (np.linalg.norm(v) * np.linalg.norm(w) + 1e-9), -1, 1)))
-            seps = [sep(k) for k in s.kfs]; j = int(np.argmin(seps))
-            if seps[j] > KF_DEG:
-                ka = s.kfs[j]; m = match(ka["d"], d)
-                if len(m) >= 40:
-                    s.tri(ka, R, t, ka["xy"][[x.queryIdx for x in m]], xy[[x.trainIdx for x in m]], d[[x.trainIdx for x in m]])
-                s.add_kf(R, t, xy, d, jpg)
-
-        dist = s.distance(R, t, W, H)
-        r = s.guide(R, t)
-        r.update(info)
-        if dist: r["msg"], r["lvl"] = dist, "warn"
-        return r
-
-    # ---- finish -----------------------------------------------------------
-    def finish(s):
-        if len(s.photos) < 12: return dict(msg=f"Only {len(s.photos)} saved photos. Capture at least 12 first.", lvl="bad")
-        with open(s.out / "sparse.ply", "w") as f:
-            f.write(f"ply\nformat ascii 1.0\nelement vertex {len(s.pts)}\nproperty float x\nproperty float y\nproperty float z\nend_header\n")
-            f.writelines(f"{x} {y} {z}\n" for x, y, z in s.pts)
-        return reconstruct(s.img, s.out, SETTINGS)
-
-
+# ---- pages ---------------------------------------------------------------
 @app.get("/")
-def index(): return FileResponse(BASE / "frontend" / "index.html")
+@app.get("/phone")
+def page(request: Request):
+    return FileResponse(BASE / "frontend" / PAGES[request.url.path], headers={"Cache-Control": "no-store"})
 
 
-@app.get("/camera.mjs")
-def camera_module(): return FileResponse(BASE / "frontend" / "camera.mjs", media_type="text/javascript")
+@app.get("/{module}.mjs")
+def module(module: str):
+    if f"{module}.mjs" not in MODULES:
+        raise HTTPException(404)
+    return FileResponse(BASE / "frontend" / f"{module}.mjs", media_type="text/javascript")
+
+
+@app.get("/api/plan")
+def capture_plan():
+    return coverage.plan()
+
+
+@app.get("/api/connect")
+def connect(request: Request):
+    """Phone links for the laptop screen. Only the laptop itself may read the key."""
+    if network.client_kind(request.client.host if request.client else None) != "local":
+        raise HTTPException(403)
+    addresses = network.lan_addresses()
+    urls = [f"https://{address}:{SETTINGS.port}/phone?key={network.ACCESS_KEY}" for address in addresses]
+    certified = network.certificate_addresses(SETTINGS)
+    problems = []
+    if not SETTINGS.lan:
+        problems.append('LAN mode is off. Set lan = true in config.local.toml and restart, so the phone can connect.')
+    if not project_path(SETTINGS.tls_cert).is_file() or not project_path(SETTINGS.tls_key).is_file():
+        problems.append("No HTTPS certificate yet. Run: .venv/Scripts/python.exe -m scripts.make_cert")
+    elif certified is not None and addresses and addresses[0] not in certified:
+        problems.append(f"This laptop's address {addresses[0]} is not in the certificate ({', '.join(certified)}). "
+                        "Rerun scripts.make_cert after changing networks.")
+    if not addresses:
+        problems.append("No private network address found. Connect the laptop to the same Wi-Fi as the phone.")
+    svg = None
+    if urls and SETTINGS.lan and project_path(SETTINGS.tls_cert).is_file():  # Never show a link that cannot work.
+        import segno
+        svg = segno.make(urls[0], error="m").svg_inline(scale=6, border=2, dark="#000", light="#fff")
+    return dict(lan=SETTINGS.lan, urls=urls, qr_svg=svg, problems=problems, mode=SETTINGS.mode)
+
+
+# ---- scans ---------------------------------------------------------------
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def folder(scan_id: str) -> Path:
+    if not re.fullmatch(SCAN_ID, scan_id) or not (SCANS / scan_id / "scan.json").is_file():
+        raise HTTPException(404, "Unknown scan")
+    return SCANS / scan_id
+
+
+def read(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def write(path: Path, value):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def describe(scan: Path) -> dict:
+    meta, poses = read(scan / "scan.json", {}), read(scan / "poses.json", [])
+    return dict(id=scan.name, **meta, photos=poses, coverage=coverage.summarise(poses),
+                status=read(scan / "status.json", None),
+                files=[name for name in sorted(DOWNLOADS) if (scan / name).is_file()])
+
+
+@app.post("/api/scans")
+def create_scan():
+    scan_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
+    (SCANS / scan_id / "images").mkdir(parents=True)
+    write(SCANS / scan_id / "poses.json", [])
+    write(SCANS / scan_id / "scan.json", dict(created=now(), finished=False, size=None))
+    return dict(id=scan_id, plan=coverage.plan())
+
+
+@app.get("/api/scans")
+def list_scans():
+    scans = sorted((path for path in SCANS.glob("*") if re.fullmatch(SCAN_ID, path.name) and (path / "scan.json").is_file()),
+                   reverse=True)[:50]
+    return [describe(scan) for scan in scans]
+
+
+@app.get("/api/scans/{scan_id}")
+def scan_details(scan_id: str):
+    return describe(folder(scan_id))
+
+
+def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | None) -> dict:
+    with _write_lock:
+        meta, poses = read(scan / "scan.json", {}), read(scan / "poses.json", [])
+        if meta.get("finished"):
+            return dict(accepted=False, reason="This scan is finished. Start a new scan to add photos.")
+        if len(poses) >= SETTINGS.max_photos:
+            return dict(accepted=False, reason=f"{SETTINGS.max_photos}-photo limit reached. Tap Finish.")
+        try:
+            image, size = decode_jpeg(data, tuple(meta["size"]) if meta.get("size") else None, MAX_UPLOAD_BYTES)
+        except (UnidentifiedImageError, Image.DecompressionBombError, OSError):
+            return dict(accepted=False, reason="Expected a JPEG photo from the phone camera.")
+        except ValueError as error:
+            reason = str(error)
+            if "orientation changed" in reason:
+                reason = "Keep the phone in the same orientation (portrait or landscape) as the first photo."
+            return dict(accepted=False, reason=reason)
+        values = quality.measurements(image)
+        problem = quality.problem(values)
+        if problem:
+            return dict(accepted=False, reason=problem, quality=values)
+        name = f"kf_{len(poses):04d}.jpg"
+        (scan / "images" / name).write_bytes(data)
+        ring = coverage.ring_of(pitch) if pitch is not None and azimuth is not None else None
+        poses.append(dict(name=name, azimuth=azimuth, pitch=pitch, ring=ring,
+                          sector=coverage.sector_of(azimuth) if ring is not None else None,
+                          time=now(), quality={key: round(value, 3) for key, value in values.items()}))
+        write(scan / "poses.json", poses)
+        if not meta.get("size"):
+            write(scan / "scan.json", {**meta, "size": list(size)})
+        return dict(accepted=True, name=name, ring=poses[-1]["ring"], sector=poses[-1]["sector"],
+                    coverage=coverage.summarise(poses))
+
+
+@app.post("/api/scans/{scan_id}/photos")
+async def upload_photo(scan_id: str, request: Request,
+                       azimuth: float | None = Query(None, ge=-720, le=720), pitch: float | None = Query(None, ge=-90, le=90)):
+    scan = folder(scan_id)
+    if int(request.headers.get("content-length") or 0) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Photo exceeds 25 MB")
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "Photo exceeds 25 MB")
+    return await asyncio.to_thread(add_photo, scan, bytes(data), azimuth, pitch)
+
+
+@app.delete("/api/scans/{scan_id}/photos/last")
+def remove_last(scan_id: str):
+    scan = folder(scan_id)
+    with _write_lock:
+        meta, poses = read(scan / "scan.json", {}), read(scan / "poses.json", [])
+        if meta.get("finished") or not poses:
+            raise HTTPException(409, "Nothing to undo")
+        removed = poses.pop()
+        (scan / "images" / removed["name"]).unlink(missing_ok=True)
+        write(scan / "poses.json", poses)
+        return dict(removed=removed["name"], coverage=coverage.summarise(poses))
+
+
+@app.post("/api/scans/{scan_id}/finish")
+def finish(scan_id: str):
+    scan = folder(scan_id)
+    with _write_lock:
+        meta, poses = read(scan / "scan.json", {}), read(scan / "poses.json", [])
+        if len(poses) < MIN_PHOTOS:
+            raise HTTPException(409, f"Only {len(poses)} photos; take at least {MIN_PHOTOS} before finishing.")
+        meta = {**meta, "finished": True, "finished_at": now()}
+        write(scan / "scan.json", meta)
+        temporary = scan / "scan.zip.tmp"
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for pose in poses:
+                bundle.write(scan / "images" / pose["name"], "images/" + pose["name"])
+            bundle.writestr("poses.json", json.dumps(poses, indent=2))
+            bundle.writestr("scan.json", json.dumps(meta, indent=2))
+        os.replace(temporary, scan / "scan.zip")
+    return describe(scan)
+
+
+@app.post("/api/scans/{scan_id}/reconstruct")
+def start_reconstruction(scan_id: str):
+    scan = folder(scan_id)
+    if not read(scan / "scan.json", {}).get("finished"):
+        raise HTTPException(409, "Finish the scan first.")
+    if SETTINGS.mode != "reconstruct":
+        raise HTTPException(409, "This laptop is in capture mode. Download scan.zip and reconstruct on the GPU laptop.")
+    if _heavy_job.locked():
+        raise HTTPException(409, "Another reconstruction is running.")
+    write(scan / "status.json", dict(state="running", started=now(), message="COLMAP reconstruction running."))
+
+    def run():
+        try:
+            result = reconstruct(scan / "images", scan, SETTINGS)
+            state = "ready" if result.get("model_ready") else "failed"
+            write(scan / "status.json", dict(state=state, finished=now(), message=result.get("msg", "")))
+        except Exception:
+            logging.exception("Reconstruction failed")
+            write(scan / "status.json", dict(state="failed", finished=now(), message="Reconstruction failed; see the server console."))
+    threading.Thread(target=run, daemon=True).start()
+    return JSONResponse(dict(state="running"), status_code=202)
+
+
+@app.get("/scans/{scan_id}/images/{name}")
+def photo(scan_id: str, name: str):
+    if not re.fullmatch(PHOTO, name):
+        raise HTTPException(404)
+    path = folder(scan_id) / "images" / name
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/scans/{scan_id}/{name}")
+def download(scan_id: str, name: str):
+    path = folder(scan_id) / name
+    if name not in DOWNLOADS or not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, filename=f"{scan_id}-{name}")
 
 
 @app.get("/api/health")
 def health():
-    return dict(status="ok", mode=SETTINGS.mode, colmap_found=bool(resolve_tool(SETTINGS.colmap)),
-                textured_export=False, segmentation=False, reconstruction_verified=False)
+    return dict(status="ok", mode=SETTINGS.mode, lan=SETTINGS.lan, colmap_found=bool(resolve_tool(SETTINGS.colmap)))
 
 
-@app.get("/scans/{scan_id}/{filename}")
-def download(scan_id: str, filename: str):
-    if not __import__("re").fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", scan_id):
-        raise HTTPException(404)
-    if filename not in {"sparse.ply", "mesh.obj", "mesh.glb", "colmap.log"}:
-        raise HTTPException(404)
-    path = SCANS / scan_id / filename
-    if not path.is_file(): raise HTTPException(404)
-    return FileResponse(path, filename=filename)
+def recover():
+    """Nothing runs across restarts, so a reconstruction still marked running was interrupted."""
+    for status in SCANS.glob("*/status.json"):
+        if read(status, {}).get("state") == "running":
+            write(status, dict(state="interrupted", finished=now(), message="The server stopped during reconstruction."))
 
 
-@app.websocket("/ws")
-async def ws_(ws: WebSocket):
-    origin = ws.headers.get("origin", "")
-    host = ws.headers.get("host", "")
-    if origin and origin not in (f"http://{host}", f"https://{host}"):
-        await ws.close(code=1008); return
-    await ws.accept(); s = Scan()
-    await ws.send_json({"type": "ready", "scan_id": s.id, "mode": SETTINGS.mode,
-                        "msg": f"Scanner ready ({SETTINGS.mode} mode). Start the camera."})
-    try:
-        while True:
-            m = await ws.receive()
-            if m["type"] == "websocket.disconnect": break
-            if m.get("bytes") is not None:
-                try:
-                    processor = s.import_photo if s.import_next else s.process
-                    s.import_next = False
-                    result = await asyncio.to_thread(processor, m["bytes"])
-                except (cv2.error, ValueError, FloatingPointError):
-                    logging.exception("Frame processing failed")
-                    result = s.fb("Could not process this frame; try moving slowly.", "bad")
-                result["type"] = "frame"
-                await ws.send_json(result)
-            elif m.get("text") == "reset":
-                s = Scan()
-                await ws.send_json({"type": "reset", "scan_id": s.id, **s.fb("New scan started.", "ok")})
-            elif m.get("text") == "capture":
-                s.force_capture = True
-                await ws.send_json({"type": "capture", **s.fb("Manual capture requested; waiting for a usable frame.", "ok")})
-            elif m.get("text") == "import":
-                s.import_next = True
-                await ws.send_json({"type": "import", "msg": "Importing photo…"})
-            elif m.get("text") == "cancel_import":
-                s.import_next = False
-            elif m.get("text") == "finish":
-                message = "Saving capture." if SETTINGS.mode == "capture" else "Building experimental reconstruction. This can take several minutes."
-                await ws.send_json({"type": "busy", "msg": message, "lvl": "ok"})
-                try:
-                    result = await asyncio.to_thread(s.finish)
-                except Exception:
-                    logging.exception("Reconstruction failed")
-                    result = {"msg": "Reconstruction failed; check the server console.", "lvl": "bad"}
-                files = ["sparse.ply", "colmap.log"]
-                if result.get("model_ready"):
-                    files.extend(["mesh.obj", "mesh.glb"])
-                result.update(type="finish", scan_id=s.id,
-                              files=[f for f in files if (s.out / f).is_file()])
-                await ws.send_json(result)
-    except WebSocketDisconnect:
-        pass
+def serve():
+    SCANS.mkdir(exist_ok=True)
+    recover()
+    if not SETTINGS.lan:
+        print("Scanner on http://localhost:8000 (this laptop only). Set lan = true to connect a phone.")
+        uvicorn.run(app, host="127.0.0.1", port=8000)
+        return
+    cert, key = project_path(SETTINGS.tls_cert), project_path(SETTINGS.tls_key)
+    if not cert.is_file() or not key.is_file():
+        sys.exit("LAN mode needs an HTTPS certificate. Run: .venv/Scripts/python.exe -m scripts.make_cert")
+    addresses = network.lan_addresses()
+    print(f"Scanner on https://localhost:{SETTINGS.port} (laptop dashboard shows the phone QR code).")
+    if addresses:
+        import segno
+        url = f"https://{addresses[0]}:{SETTINGS.port}/phone?key={network.ACCESS_KEY}"
+        print(f"Phone link (same Wi-Fi): {url}")
+        segno.make(url, error="m").terminal(compact=True)
+    # Listen on all interfaces; the middleware still refuses non-private clients and requests without the key.
+    uvicorn.run(app, host="0.0.0.0", port=SETTINGS.port, ssl_certfile=str(cert), ssl_keyfile=str(key))
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000, ws_max_size=MAX_UPLOAD_BYTES, ws_max_queue=2)
+    serve()

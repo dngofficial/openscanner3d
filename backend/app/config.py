@@ -16,6 +16,12 @@ class Settings:
     quality: str = "low"
     timeout_seconds: int = 1800
     max_photos: int = 100
+    # Phone capture over the local network. LAN mode serves HTTPS (needed for the phone's camera and
+    # motion sensors) on all interfaces, but only answers private-network clients holding the launch key.
+    lan: bool = False
+    port: int = 8443
+    tls_cert: str = "certs/lan.pem"
+    tls_key: str = "certs/lan-key.pem"
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -31,7 +37,12 @@ def load_settings(path: Path | None = None) -> Settings:
         raise ValueError("mode must be capture or reconstruct")
     if settings.quality not in {"low", "medium", "high"}:
         raise ValueError("quality must be low, medium, or high")
-    for key, low, high in (("timeout_seconds", 10, 14400), ("max_photos", 12, 500)):
+    if type(settings.lan) is not bool:
+        raise ValueError("lan must be true or false")
+    for key in ("tls_cert", "tls_key"):
+        if not isinstance(getattr(settings, key), str) or not getattr(settings, key).strip():
+            raise ValueError(f"{key} must be a file path")
+    for key, low, high in (("timeout_seconds", 10, 14400), ("max_photos", 12, 500), ("port", 1024, 65535)):
         value = getattr(settings, key)
         if type(value) is not int or not low <= value <= high:
             raise ValueError(f"{key} must be an integer between {low} and {high}")
@@ -39,6 +50,11 @@ def load_settings(path: Path | None = None) -> Settings:
         if not isinstance(getattr(settings, key), str) or not getattr(settings, key).strip():
             raise ValueError(f"{key} must be an executable name or path")
     return settings
+
+
+def project_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else ROOT / path
 
 
 def resolve_tool(value: str) -> str | None:

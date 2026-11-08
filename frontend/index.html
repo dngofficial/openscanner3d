@@ -5,315 +5,125 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Object scanner</title>
 <style>
-  :root { --bg:#16181b; --panel:#1f2226; --ink:#e8e3d8; --dim:#8d908f; --have:#5fb3a1; --need:#d99a3a; --bad:#d9604a; }
-  * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font:16px/1.4 "IBM Plex Sans", system-ui, sans-serif;
-         display:grid; grid-template-columns: minmax(0,1fr) 300px; gap:20px; padding:20px; }
-  @media (max-width:860px) { body { grid-template-columns:1fr; } }
-  .stage { position:relative; }
-  main { min-width:0; display:flex; flex-direction:column; gap:16px; }
-  h2 { font-size:15px; margin:0 0 8px; font-weight:600; }
-  .processed { background:var(--panel); padding:14px; border-radius:6px; }
-  #processed { display:block; width:100%; max-width:none; background:#000; border-radius:4px; }
-  .toggles { display:flex; flex-wrap:wrap; gap:12px; font-size:14px; margin:10px 0; }
-  .legend { font-size:13px; color:var(--dim); margin:8px 0 0; }
-  video { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:6px; display:block; }
-  #banner { position:absolute; left:12px; right:12px; bottom:12px; padding:12px 16px; border-radius:6px; font-weight:600;
-            background:rgba(22,24,27,.88); border-left:6px solid var(--dim); }
-  #banner.ok { border-color:var(--have); } #banner.warn { border-color:var(--need); } #banner.bad { border-color:var(--bad); }
-  aside { background:var(--panel); border-radius:6px; padding:16px; display:flex; flex-direction:column; gap:14px; align-self:start; }
-  select, button { font:inherit; color:var(--ink); background:var(--bg); border:1px solid #3a3e44; border-radius:4px; padding:9px 10px; }
-  button { cursor:pointer; } button.go { background:var(--have); color:#0e1a17; border-color:var(--have); font-weight:600; }
-  button:focus-visible, select:focus-visible { outline:2px solid var(--need); outline-offset:2px; }
-  canvas { width:100%; max-width:240px; align-self:center; }
-  dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; color:var(--dim); } dd { margin:0; color:var(--ink); text-align:right; }
-  .row { display:flex; gap:8px; } .row button { flex:1; }
-  small { color:var(--dim); }
+  :root { --bg:#14161a; --panel:#1e2126; --line:#353a41; --ink:#ece8df; --dim:#9a9d9f; --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui, sans-serif; padding:24px 16px; }
+  main { max-width:1100px; margin:0 auto; display:grid; gap:20px; }
+  h1 { font-size:24px; margin:0; } h2 { font-size:17px; margin:0 0 10px; }
+  section { background:var(--panel); border-radius:8px; padding:18px; }
+  .connect { display:grid; grid-template-columns:auto 1fr; gap:20px; align-items:start; }
+  @media (max-width:700px) { .connect { grid-template-columns:1fr; } }
+  #qr svg { display:block; width:220px; height:220px; border-radius:6px; }
+  #qr:empty { display:none; }
+  code { background:#0f1114; padding:2px 6px; border-radius:4px; word-break:break-all; }
+  .problem { color:var(--warn); margin:4px 0; }
+  .scan { border-top:1px solid var(--line); padding:14px 0; display:grid; grid-template-columns:150px 1fr; gap:16px; }
+  .scan:first-of-type { border-top:0; }
+  .scan canvas { width:150px; height:150px; }
+  .meta { color:var(--dim); font-size:14px; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  a, button { font:inherit; color:var(--ink); }
+  a.button, button { background:#2a2e34; border:1px solid #4a4f57; border-radius:6px; padding:8px 12px; text-decoration:none; cursor:pointer; }
+  button.go { background:var(--ok); border-color:var(--ok); color:#06201b; font-weight:600; }
+  .thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:6px; margin-top:10px; }
+  .thumbs img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; background:#000; }
+  .state-ready { color:var(--ok); } .state-failed, .state-interrupted { color:var(--bad); } .state-running { color:var(--warn); }
+  [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <main>
-<h2>Live camera</h2>
-<div class="stage">
-  <video id="v" autoplay playsinline muted></video>
-  <div id="banner">Connecting to scanner…</div>
-</div>
-<section class="processed">
-  <h2>Processed camera · latest analyzed frame</h2>
-  <canvas id="processed" width="960" height="540" aria-label="Camera frame with feature bounding box, detected points and feature motion"></canvas>
-  <div class="toggles">
-    <label><input id="showBox" type="checkbox" checked> Feature box</label>
-    <label><input id="showPoints" type="checkbox" checked> Features</label>
-    <label><input id="showTrails" type="checkbox" checked> Motion trails</label>
-  </div>
-  <p class="legend">Amber box: central 90% of detected features. Cyan dots: image features. Amber lines: candidate matches from the previous frame. Green dots: accepted pose inliers.</p>
-  <p class="legend">The box shows feature spread, not an identified object. Background features may be included.</p>
-</section>
+  <h1>Object scanner</h1>
+  <section>
+    <h2>Connect your phone</h2>
+    <div class="connect">
+      <div id="qr" aria-label="QR code with the phone link"></div>
+      <div>
+        <p id="connectHelp">Loading…</p>
+        <div id="problems"></div>
+        <p id="urls"></p>
+        <p class="meta">The phone must be on the same Wi-Fi and trust this laptop's certificate once (see docs/PHONE_SETUP.md). The link contains a key that changes every time the scanner starts.</p>
+      </div>
+    </div>
+  </section>
+  <section>
+    <h2>Scans</h2>
+    <div id="scans"><p class="meta">No scans yet. Start one from the phone.</p></div>
+  </section>
 </main>
-<aside>
-  <small id="mode">Connecting…</small>
-  <small>iPhone or Samsung via Camo: open Camo Studio on this laptop, connect your phone, then select Camo below.</small>
-  <select id="cam" aria-label="Camera"></select>
-  <div class="row"><button id="startCamera">Start camera</button><button id="refreshCameras">Refresh cameras</button></div>
-  <small id="cameraStatus" role="status">Camera is stopped.</small>
-  <label>Import photos <input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
-  <small id="importStatus" role="status"></small>
-  <canvas id="dome" width="240" height="240" aria-label="Coverage map"></canvas>
-  <small>Rings run from low angle (outer) to overhead (centre). Teal = captured, amber = still needed. The dot is you.</small>
-  <dl>
-    <dt>Saved photos</dt><dd id="kfs">0</dd><dt>Tracked views</dt><dd id="tracked">0</dd><dt>Live tracking</dt><dd id="tracking">Initializing</dd><dt>Map points</dt><dd id="pts">0</dd>
-    <dt>Features (need 40)</dt><dd id="feats">–</dd><dt>Brightness / 255</dt><dd id="brightness">–</dd><dt>Sharpness</dt><dd id="blur">–</dd><dt>Object in frame</dt><dd id="size">–</dd>
-  </dl>
-  <small id="capture_status">Move slowly around the object to save different views.</small>
-  <small id="quality"></small>
-  <button id="capture">Capture this view</button>
-  <div id="downloads"></div>
-  <div class="row"><button id="reset">Start over</button><button id="finish" class="go">Finish</button></div>
-</aside>
-
 <script type="module">
-import { preferredCamera, cameraConstraints, frameSize, cameraError } from '/camera.mjs';
-const $ = id => document.getElementById(id), v = $('v'), cam = $('cam'), banner = $('banner');
-const AZ = 12, RINGS = 3, ctx = $('dome').getContext('2d'), grab = document.createElement('canvas');
-let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
-let lastOverlay = null, analyzedFrame = document.createElement("canvas"), previousSavedCount = 0, savedFlash = false;
-let inFlight = false, command = null, timer = null, scanId = null, stopped = false;
-let cameraStarting = false, importReady = false, importQueue = [], importFailures = 0;
+import { drawCoverage } from '/guidance.mjs';
+const $ = id => document.getElementById(id);
+let plan = null, mode = 'capture';
+const open = new Set();
 
-async function listCams() {
-  if (!navigator.mediaDevices?.enumerateDevices) return [];
-  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(x => x.kind === 'videoinput');
-  const previous = cam.value;
-  cam.replaceChildren();
-  devices.forEach((d, i) => cam.add(new Option(d.label || 'Camera ' + (i + 1), d.deviceId)));
-  if (devices.some(d => d.deviceId === previous)) cam.value = previous;
-  return devices;
+async function json(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
 }
-async function start(id) {
-  stream?.getTracks().forEach(t => t.stop());
-  stream = null;
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable');
+
+async function loadConnect() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(id));
+    const info = await json('/api/connect');
+    mode = info.mode;
+    $('qr').innerHTML = info.qr_svg || '';
+    $('connectHelp').textContent = info.urls.length && info.lan
+      ? 'Scan this QR code with the phone camera, or open the link below in Safari / Chrome on the phone.'
+      : 'The phone cannot connect yet:';
+    $('problems').replaceChildren(...info.problems.map(text => Object.assign(document.createElement('p'), { className: 'problem', textContent: text })));
+    $('urls').replaceChildren(...(info.lan ? info.urls : []).map(url => { const c = document.createElement('code'); c.textContent = url; return c; }));
   } catch (error) {
-    if (error.name !== 'OverconstrainedError') throw error;
-    stream = await navigator.mediaDevices.getUserMedia({audio: false, video: id ? {deviceId: {exact: id}} : true});
+    $('connectHelp').textContent = 'Open this page on the laptop itself (localhost) to see the phone link.';
   }
-  v.srcObject = stream;
-  await v.play();
-  await listCams();
-  const track = stream.getVideoTracks()[0];
-  if (track.getSettings().deviceId) cam.value = track.getSettings().deviceId;
-  $('cameraStatus').textContent = track.label + ' · ' + v.videoWidth + ' × ' + v.videoHeight;
-  track.addEventListener('ended', () => {
-    stream = null;
-    $('cameraStatus').textContent = 'Camera disconnected. Reconnect Camo, then press Start camera.';
-  });
 }
-async function startCamera(manualId) {
-  if (cameraStarting || inFlight || command || importQueue.length) {
-    $('cameraStatus').textContent = 'Wait for the current frame or operation, then try again.';
-    return;
+
+function card(scan) {
+  const row = document.createElement('div'); row.className = 'scan';
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 300;
+  drawCoverage(canvas.getContext('2d'), 300, plan, scan.coverage.counts);
+  const body = document.createElement('div');
+  const status = scan.status ? ` · reconstruction: <span class="state-${scan.status.state}">${scan.status.state}</span>` : '';
+  body.innerHTML = `<strong>${scan.id}</strong> ${scan.finished ? '' : '<span class="state-running">(capturing)</span>'}
+    <div class="meta">${scan.photos.length} photos · ${scan.coverage.have} of ${scan.coverage.wanted} angles${scan.coverage.unguided ? ` · ${scan.coverage.unguided} without angle data` : ''}${status}</div>
+    <div class="meta">${scan.status?.message || ''}</div>`;
+  const actions = document.createElement('div'); actions.className = 'actions';
+  for (const file of scan.files) {
+    actions.append(Object.assign(document.createElement('a'), { className: 'button', href: `/scans/${scan.id}/${file}`, textContent: `Download ${file}` }));
   }
-  cameraStarting = true;
-  clearTimeout(timer);
+  if (scan.finished && mode === 'reconstruct' && scan.status?.state !== 'running') {
+    const go = Object.assign(document.createElement('button'), { className: 'go', textContent: 'Reconstruct' });
+    go.onclick = async () => {
+      go.disabled = true;
+      try { await json(`/api/scans/${scan.id}/reconstruct`, { method: 'POST' }); } catch (error) { alert(error.message); }
+      refresh();
+    };
+    actions.append(go);
+  }
+  const toggle = Object.assign(document.createElement('button'), { textContent: open.has(scan.id) ? 'Hide photos' : 'Show photos' });
+  toggle.onclick = () => { open.has(scan.id) ? open.delete(scan.id) : open.add(scan.id); refresh(); };
+  if (scan.photos.length) actions.append(toggle);
+  body.append(actions);
+  if (open.has(scan.id)) {
+    const thumbs = document.createElement('div'); thumbs.className = 'thumbs';
+    thumbs.append(...scan.photos.map(photo => Object.assign(document.createElement('img'), {
+      src: `/scans/${scan.id}/images/${photo.name}`, loading: 'lazy',
+      alt: photo.ring === null ? photo.name : `${photo.name}, ${['low', 'mid', 'high'][photo.ring]} angle, side ${photo.sector + 1}` })));
+    body.append(thumbs);
+  }
+  row.append(canvas, body);
+  return row;
+}
+
+async function refresh() {
   try {
-    const devices = await listCams();
-    const chosen = manualId || preferredCamera(devices)?.deviceId;
-    await start(chosen);
-    // Device labels can be hidden until permission has been granted.
-    if (!manualId && !chosen) {
-      const camo = preferredCamera(await listCams());
-      if (camo && stream.getVideoTracks()[0].getSettings().deviceId !== camo.deviceId) await start(camo.deviceId);
-    }
-    if (previousSavedCount > 0) {
-      requestCommand('reset'); // Keep different camera intrinsics in separate scans.
-      $('cameraStatus').textContent += ' · New scan started; previous photos remain saved.';
-    } else { stopped = false; schedule(); }
-  } catch (error) {
-    stream?.getTracks().forEach(track => track.stop()); stream = null;
-    $('cameraStatus').textContent = cameraError(error, window.isSecureContext);
-  } finally { cameraStarting = false; }
+    plan ??= await json('/api/plan');
+    const scans = await json('/api/scans');
+    if (scans.length) $('scans').replaceChildren(...scans.map(card));
+  } catch { /* keep the last view; the server may be restarting */ }
 }
-cam.onchange = () => startCamera(cam.value);
-$('startCamera').onclick = () => startCamera();
-$('refreshCameras').onclick = () => listCams().catch(error => { $('cameraStatus').textContent = error.message; });
-navigator.mediaDevices?.addEventListener?.('devicechange', () => listCams().catch(() => {}));
-window.addEventListener('pagehide', () => { stream?.getTracks().forEach(track => track.stop()); ws?.close(); });
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTimeout(timer);
-  else if (!inFlight) schedule();
-});
-$('photos').onchange = event => {
-  if (inFlight || command || importQueue.length) { $('importStatus').textContent = 'Wait for the current operation, then select photos again.'; return; }
-  const files = [...event.target.files];
-  if (!files.length) return;
-  if (files.length > 100 || files.some(file => file.size > 25 * 1024 * 1024)) {
-    $('importStatus').textContent = 'Choose at most 100 photos, each under 25 MB.'; return;
-  }
-  stream?.getTracks().forEach(track => track.stop()); stream = null;
-  importQueue = files; importFailures = 0; stopped = false;
-  $('importStatus').textContent = 'Importing photos. Keep this page open.';
-  event.target.value = ''; schedule();
-};
-
-function requestCommand(value) {
-  if (value !== 'import' && (importQueue.length || importReady)) return;
-  if (!ws || ws.readyState !== WebSocket.OPEN || command) return;
-  clearTimeout(timer);
-  command = value;
-  if (!inFlight) dispatchCommand();
-}
-function dispatchCommand() {
-  if (!command || inFlight || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(command);
-}
-function schedule() {
-  clearTimeout(timer);
-  if (!stopped && !command && !document.hidden) timer = setTimeout(send, 150);
-}
-function connect() {
-  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-  ws.onclose = () => { clearTimeout(timer); banner.textContent = 'Scanner disconnected. Reload the page to reconnect.'; banner.className = 'bad'; };
-  ws.onerror = () => { banner.textContent = 'Could not connect to the scanner.'; banner.className = 'bad'; };
-  ws.onmessage = e => {
-    const r = JSON.parse(e.data);
-    banner.textContent = r.msg; banner.className = r.lvl || '';
-    if (r.scan_id) scanId = r.scan_id;
-    if (r.mode) $('mode').textContent = r.mode === 'capture' ? 'Capture only · photos saved locally' : 'Reconstruction enabled · experimental mesh export';
-    if (r.bins) {
-      bins = r.bins; cur = r.cur; $('kfs').textContent = r.kfs; $('pts').textContent = r.pts;
-      $('tracked').textContent = r.tracked_views ?? 0; $('tracking').textContent = r.tracking || 'Initializing'; $('capture_status').textContent = r.capture || '';
-      $('feats').textContent = r.feats ?? '–'; $('brightness').textContent = r.brightness ?? '–'; $('quality').textContent = r.quality || '';
-      $('blur').textContent = r.blur ?? '–'; $('size').textContent = r.size ? Math.round(r.size * 100) + '%' : '–'; draw();
-    }
-    if (r.type === 'frame') {
-      // grab still contains the exact submitted frame; draw before sending another.
-      analyzedFrame.width = grab.width; analyzedFrame.height = grab.height;
-      analyzedFrame.getContext('2d').drawImage(grab, 0, 0);
-      lastOverlay = r.overlay || null;
-      savedFlash = r.kfs > previousSavedCount; previousSavedCount = r.kfs ?? previousSavedCount;
-      renderProcessed();
-      inFlight = false;
-      if (importReady) {
-        if (!r.accepted) importFailures++;
-        importReady = false;
-        $('importStatus').textContent = importQueue.length ? importQueue.length + ' photos remaining.' : 'Import finished. ' + importFailures + ' failed. Press Finish when ready.';
-      }
-      if (command) dispatchCommand(); else schedule();
-    } else if (r.type === 'ready') schedule();
-    else if (r.type === 'import') { command = null; importReady = true; schedule(); }
-    else if (r.type === 'reset') {
-      command = null; stopped = false; $('downloads').replaceChildren();
-      lastOverlay = null; previousSavedCount = 0; savedFlash = false;
-      analyzedFrame.width = 0; renderProcessed(); schedule();
-    } else if (r.type === 'capture') {
-      command = null; stopped = false; schedule();
-    } else if (r.type === 'finish') {
-      command = null; stopped = !!r.done;
-      const box = $('downloads'); box.replaceChildren();
-      for (const file of r.files || []) {
-        const a = document.createElement('a'); a.href = '/scans/' + encodeURIComponent(scanId) + '/' + encodeURIComponent(file);
-        a.textContent = 'Download ' + file; a.style.display = 'block'; a.style.color = '#5fb3a1'; box.append(a);
-      }
-      if (!stopped) schedule();
-    }
-  };
-}
-async function send() {
-  if (!ws || ws.readyState !== WebSocket.OPEN || command || stopped || cameraStarting || inFlight) return;
-  if (importQueue.length) {
-    if (!importReady) { requestCommand('import'); return; }
-    const file = importQueue.shift();
-    inFlight = true;
-    try {
-      const bitmap = await createImageBitmap(file);
-      [grab.width, grab.height] = frameSize(bitmap.width, bitmap.height);
-      grab.getContext('2d').drawImage(bitmap, 0, 0, grab.width, grab.height); bitmap.close();
-      if (ws.readyState !== WebSocket.OPEN) throw new Error('Connection lost');
-      ws.send(file); // Preserve original bytes; the server stores a normalized working JPEG separately.
-    } catch (error) {
-      importFailures++; inFlight = false;
-      $('importStatus').textContent = 'Could not import ' + file.name + ': ' + error.message;
-      if (!importQueue.length) { if (ws.readyState === WebSocket.OPEN) ws.send('cancel_import'); importReady = false; }
-      schedule();
-    }
-    return;
-  }
-  if (!stream) return;
-  if (!v.videoWidth || v.readyState < 2) { schedule(); return; }
-  inFlight = true;
-  [grab.width, grab.height] = frameSize(v.videoWidth, v.videoHeight);
-  grab.getContext('2d').drawImage(v, 0, 0, grab.width, grab.height);
-  grab.toBlob(b => {
-    if (b && ws.readyState === WebSocket.OPEN) ws.send(b);
-    else { inFlight = false; if (command) dispatchCommand(); else schedule(); }
-  }, 'image/jpeg', .9);
-}
-$('reset').onclick = () => requestCommand('reset');
-$('capture').onclick = () => requestCommand('capture');
-$('finish').onclick = () => requestCommand('finish');
-
-function renderProcessed() {
-  const canvas = $('processed'), c = canvas.getContext('2d');
-  canvas.width = analyzedFrame.width || 960; canvas.height = analyzedFrame.height || 540;
-  const w = canvas.width, h = canvas.height;
-  c.fillStyle = '#080b10'; c.fillRect(0, 0, w, h);
-  if (analyzedFrame.width) c.drawImage(analyzedFrame, 0, 0);
-  if (!lastOverlay) {
-    c.fillStyle = '#fff'; c.font = '20px system-ui'; c.fillText('Waiting for an analyzed frame…', 20, 35);
-    return;
-  }
-  const o = lastOverlay, sx = w / o.width, sy = h / o.height;
-  c.lineWidth = Math.max(1.5, w / 600);
-  if ($('showTrails').checked) {
-    c.strokeStyle = '#ffbd59';
-    for (const [x0, y0, x1, y1] of o.trails) {
-      c.beginPath(); c.moveTo(x0 * sx, y0 * sy); c.lineTo(x1 * sx, y1 * sy); c.stroke();
-    }
-  }
-  function dots(points, color, radius) {
-    c.fillStyle = color;
-    for (const [x, y] of points) { c.beginPath(); c.arc(x * sx, y * sy, radius, 0, Math.PI * 2); c.fill(); }
-  }
-  if ($('showPoints').checked) { dots(o.points, '#6de7ff', 2.6); dots(o.inliers, '#6dff91', 4); }
-  if ($('showBox').checked && o.box) {
-    const [x0, y0, x1, y1] = o.box;
-    c.strokeStyle = '#ffbd59'; c.strokeRect(x0 * sx, y0 * sy, (x1 - x0) * sx, (y1 - y0) * sy);
-    c.font = '17px system-ui';
-    const label = 'Feature region';
-    const y = Math.max(27, y0 * sy);
-    c.fillStyle = '#151b24'; c.fillRect(x0 * sx, y - 26, c.measureText(label).width + 16, 26);
-    c.fillStyle = '#ffbd59'; c.fillText(label, x0 * sx + 8, y - 7);
-  }
-  if (savedFlash) {
-    c.strokeStyle = '#6dff91'; c.lineWidth = 8; c.strokeRect(4, 4, w - 8, h - 8);
-  }
-  const label = savedFlash ? 'PHOTO SAVED · ' + previousSavedCount : 'Saved photos: ' + previousSavedCount;
-  c.font = '18px system-ui'; c.fillStyle = 'rgba(8,11,16,.88)';
-  c.fillRect(12, h - 46, c.measureText(label).width + 24, 34);
-  c.fillStyle = savedFlash ? '#6dff91' : '#fff'; c.fillText(label, 24, h - 23);
-}
-for (const id of ['showBox', 'showPoints', 'showTrails']) $(id).onchange = renderProcessed;
-
-/* ---- coverage dome ---- */
-function draw() {
-  const c = 120, R = 112, edges = [R, R * .62, R * .3, 0];   // outer = low elevation
-  ctx.clearRect(0, 0, 240, 240);
-  for (let ring = 0; ring < RINGS; ring++) for (let a = 0; a < AZ; a++) {
-    const a0 = -Math.PI / 2 + a * 2 * Math.PI / AZ, a1 = a0 + 2 * Math.PI / AZ;
-    ctx.beginPath(); ctx.arc(c, c, edges[ring], a0, a1); ctx.arc(c, c, edges[ring + 1], a1, a0, true); ctx.closePath();
-    ctx.fillStyle = bins[ring * AZ + a] ? '#5fb3a1' : 'rgba(217,154,58,.28)'; ctx.fill();
-    ctx.strokeStyle = '#1f2226'; ctx.lineWidth = 2; ctx.stroke();
-  }
-  if (cur) {
-    const ang = -Math.PI / 2 + (cur[0] + Math.PI) / 2 / Math.PI * 2 * Math.PI * 1, r = R * (1 - Math.min(Math.max(cur[1], 0), 90) / 90) * .95;
-    ctx.beginPath(); ctx.arc(c + r * Math.cos(ang), c + r * Math.sin(ang), 6, 0, 7); ctx.fillStyle = '#e8e3d8'; ctx.fill();
-  }
-}
-
-if (!navigator.mediaDevices?.getUserMedia) $('cameraStatus').textContent = cameraError(new Error('Camera API unavailable'), window.isSecureContext);
-draw(); renderProcessed(); connect();
+loadConnect(); refresh(); setInterval(refresh, 3000);
 </script>
 </body>
 </html>

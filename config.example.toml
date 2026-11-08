@@ -12,3 +12,10 @@ blender = 'blender'
 quality = "low"
 timeout_seconds = 1800
 max_photos = 100
+
+# Phone capture: lan = true serves https://<laptop Wi-Fi address>:8443 for the phone.
+# Needs the certificate from: .venv/Scripts/python.exe -m scripts.make_cert (see docs/PHONE_SETUP.md).
+lan = false
+port = 8443
+tls_cert = 'certs/lan.pem'
+tls_key = 'certs/lan-key.pem'

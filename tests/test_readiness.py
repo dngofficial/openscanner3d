@@ -12,7 +12,6 @@ import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend.app import main as server
 from backend.app import reconstruction
 from backend.app.config import Settings, load_settings
 from backend.app.images import normalize_photo
@@ -23,7 +22,8 @@ class ConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {}, clear=True):
             path = Path(root) / "config.toml"
             self.assertEqual(load_settings(path).mode, "capture")
-            for content in ('mode = "cloud"', 'max_photos = 0', 'timeout_seconds = "forever"', 'unknown = 3'):
+            for content in ('mode = "cloud"', 'max_photos = 0', 'timeout_seconds = "forever"', 'unknown = 3',
+                            'lan = "yes"', 'port = 80', 'tls_cert = ""'):
                 path.write_text(content)
                 with self.assertRaises(ValueError):
                     load_settings(path)
@@ -44,58 +44,6 @@ class ConfigurationTests(unittest.TestCase):
         Image.new('RGB', (9000, 32)).save(data, format='JPEG')
         with self.assertRaises(ValueError):
             normalize_photo(data.getvalue())
-
-
-class CaptureTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.scans = patch.object(server, "SCANS", Path(self.temp.name))
-        self.scans.start(); self.addCleanup(self.scans.stop)
-        self.settings = patch.object(server, "SETTINGS", Settings())
-        self.settings.start(); self.addCleanup(self.settings.stop)
-
-    @staticmethod
-    def jpeg(width=640, height=480):
-        return cv2.imencode('.jpg', np.full((height, width, 3), 100, np.uint8))[1].tobytes()
-
-    def test_import_without_camera_and_capture_finish(self):
-        with TestClient(server.app) as client, patch.object(reconstruction, "resolve_tool") as resolve:
-            self.assertEqual(client.get('/camera.mjs').status_code, 200)
-            with client.websocket_connect('/ws') as ws:
-                ready = ws.receive_json()
-                for _ in range(12):
-                    ws.send_text('import')
-                    self.assertEqual(ws.receive_json()['type'], 'import')
-                    ws.send_bytes(self.jpeg())
-                    self.assertTrue(ws.receive_json()['accepted'])
-                ws.send_text('finish')
-                self.assertEqual(ws.receive_json()['type'], 'busy')
-                result = ws.receive_json()
-                self.assertTrue(result['done'])
-                self.assertFalse(result['model_ready'])
-                self.assertNotIn('mesh.glb', result['files'])
-            self.assertEqual(len(list((Path(self.temp.name) / ready['scan_id'] / 'images').glob('*.jpg'))), 12)
-            resolve.assert_not_called()
-
-    def test_invalid_image_orientation_and_limit(self):
-        scan = server.Scan()
-        self.assertFalse(scan.import_photo(b'not an image')['accepted'])
-        self.assertTrue(scan.import_photo(self.jpeg())['accepted'])
-        result = scan.import_photo(self.jpeg(480, 640))
-        self.assertFalse(result['accepted'])
-        self.assertIn('orientation', result['msg'])
-        with patch.object(server, 'SETTINGS', Settings(max_photos=1)):
-            self.assertFalse(scan.import_photo(self.jpeg())['accepted'])
-        self.assertEqual(len(scan.photos), 1)
-
-    def test_non_jpeg_rejected(self):
-        image = cv2.imencode('.png', np.zeros((480, 640, 3), np.uint8))[1].tobytes()
-        self.assertEqual(server.Scan().process(image)['lvl'], 'bad')
-        scan = server.Scan()
-        self.assertTrue(scan.import_photo(image)['accepted'])
-        self.assertEqual((scan.out / 'originals/kf_0000.png').read_bytes(), image)
-        self.assertTrue((scan.img / 'kf_0000.jpg').is_file())
 
 
 class ReconstructionTests(unittest.TestCase):

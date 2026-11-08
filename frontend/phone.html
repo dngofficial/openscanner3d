@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101215">
+<title>Scan with phone</title>
+<style>
+  :root { --bg:#101215; --panel:rgba(16,18,21,.86); --ink:#f1ede4; --dim:#a2a5a8; --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink); font:16px/1.35 system-ui, sans-serif; overflow:hidden; }
+  video { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
+  .layer { position:fixed; inset:0; display:flex; flex-direction:column; justify-content:space-between; pointer-events:none;
+           padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+  .layer > * { pointer-events:auto; }
+  #alert { background:var(--panel); border-left:8px solid var(--dim); border-radius:8px; padding:14px 16px; font-size:20px; font-weight:650; min-height:64px; }
+  #alert.ok { border-color:var(--ok); } #alert.warn { border-color:var(--warn); } #alert.bad { border-color:var(--bad); }
+  #target { position:fixed; left:50%; top:50%; width:46vmin; height:46vmin; transform:translate(-50%,-50%); border:3px dashed rgba(255,255,255,.75);
+            border-radius:50%; pointer-events:none; }
+  #arrow { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); font-size:22vmin; line-height:1; color:#fff;
+           text-shadow:0 0 12px #000; pointer-events:none; }
+  #flash { position:fixed; inset:0; border:10px solid var(--ok); opacity:0; transition:opacity .4s; pointer-events:none; }
+  #flash.on { opacity:1; transition:none; }
+  .bottom { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:end; }
+  #map { width:34vmin; height:34vmin; max-width:170px; max-height:170px; background:var(--panel); border-radius:50%; }
+  .controls { display:flex; flex-direction:column; gap:8px; background:var(--panel); border-radius:10px; padding:10px; }
+  #count { font-size:22px; font-weight:700; } #count small { color:var(--dim); font-weight:400; font-size:14px; }
+  .row { display:flex; gap:8px; } .row button { flex:1; }
+  button { font:inherit; font-weight:600; color:var(--ink); background:#2a2e34; border:1px solid #4a4f57; border-radius:8px; padding:12px 10px; }
+  button.go { background:var(--ok); border-color:var(--ok); color:#06201b; }
+  button:disabled { opacity:.45; }
+  .sheet { position:fixed; inset:0; background:var(--bg); overflow:auto; padding:24px 20px max(24px, env(safe-area-inset-bottom)); }
+  .sheet h1 { font-size:24px; margin:0 0 12px; } .sheet p, .sheet li { color:#d6d2c9; } .sheet button { width:100%; margin-top:12px; padding:16px; font-size:18px; }
+  #reference { width:100%; max-height:40vh; object-fit:contain; border-radius:8px; background:#000; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<div id="target" hidden></div>
+<div id="arrow" aria-hidden="true"></div>
+<div id="flash"></div>
+<div class="layer" id="hud" hidden>
+  <div id="alert" role="status" aria-live="polite">Starting…</div>
+  <div class="bottom">
+    <canvas id="map" width="340" height="340" aria-label="Angle checklist: outer ring low, inner ring high; your position is the white dot"></canvas>
+    <div class="controls">
+      <div id="count">0 <small>/ 60 angles</small></div>
+      <div class="row"><button id="captureNow">Capture now</button><button id="undo">Undo</button></div>
+      <button id="finish" class="go">Finish</button>
+    </div>
+  </div>
+</div>
+
+<section class="sheet" id="intro">
+  <h1>Guided scan</h1>
+  <ol>
+    <li>Put the object on a table with space to walk around it. It must not move during the scan.</li>
+    <li>Stand at the side you want as the front and point the phone at the object.</li>
+    <li>Tap <strong>Start</strong> and allow the camera and motion access.</li>
+    <li>Keep the object inside the dashed circle. Follow the instructions at the top; photos are taken automatically when you reach a missing angle and hold still.</li>
+  </ol>
+  <p>Keep the phone the same way up (portrait or landscape) for the whole scan.</p>
+  <button id="start" class="go">Start</button>
+  <div id="resumeBox" hidden>
+    <p>An unfinished scan exists on the laptop.</p>
+    <button id="resume">Continue that scan</button>
+  </div>
+  <p id="introError" role="alert"></p>
+</section>
+
+<section class="sheet" id="realign" hidden>
+  <h1>Line up with the first photo</h1>
+  <p>Stand where this first photo was taken, point at the object the same way, then tap <strong>Re-align</strong>. Angles are measured from this position.</p>
+  <img id="reference" alt="First photo of this scan">
+  <button id="realignNow" class="go">Re-align</button>
+</section>
+
+<section class="sheet" id="done" hidden>
+  <h1>Scan saved</h1>
+  <p id="doneText"></p>
+  <p>Process or download it from the scanner page on the laptop.</p>
+  <button id="again">Start another scan</button>
+</section>
+
+<script type="module">
+import { cameraDirection, wrap180, nextStep, isSteady, exposureProblem, drawCoverage } from '/guidance.mjs';
+const $ = id => document.getElementById(id);
+const video = $('video'), map = $('map').getContext('2d'), probe = document.createElement('canvas');
+probe.width = 48; probe.height = 36;
+const probeContext = probe.getContext('2d', { willReadFrequently: true });
+let plan, scanId = null, counts, shots = {}, order = [], heading0 = null, orientation = null, motion = [], motionSeen = false;
+let stream = null, inFlight = false, lastCapture = 0, sticky = null, audio = null, wakeLock = null, ticks = 0, exposure = null, loop = null;
+const STORE = 'scanner-current-scan';
+
+function say(text, level = 'warn') { $('alert').textContent = text; $('alert').className = level; }
+function stickyAlert(text, level, ms = 2600) { sticky = { text, level, until: performance.now() + ms }; say(text, level); }
+function beep(frequency, ms) {
+  if (!audio) return;
+  const oscillator = audio.createOscillator(), gain = audio.createGain();
+  oscillator.frequency.value = frequency; gain.gain.value = 0.08;
+  oscillator.connect(gain).connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + ms / 1000);
+}
+function buzz(pattern) { navigator.vibrate?.(pattern); }
+const emptyCounts = () => plan.rings.map(() => new Array(plan.sectors).fill(0));
+const totalWanted = () => plan.rings.reduce((sum, ring) => sum + ring.target * plan.sectors, 0);
+function showCount(coverage) {
+  $('count').innerHTML = `${coverage ? coverage.have : 0} <small>/ ${totalWanted()} angles</small>`;
+}
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
+}
+
+window.addEventListener('deviceorientation', event => {
+  if (event.alpha === null || event.beta === null) return;
+  orientation = { alpha: event.alpha, beta: event.beta, gamma: event.gamma ?? 0 };
+});
+window.addEventListener('devicemotion', event => {
+  const r = event.rotationRate;
+  if (!r || r.alpha === null) return;
+  motionSeen = true;
+  const now = performance.now();
+  motion.push({ t: now, rate: Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0) });
+  motion = motion.filter(sample => now - sample.t < 1000);
+});
+
+function here() {
+  if (!orientation || heading0 === null) return null;
+  const direction = cameraDirection(orientation.alpha, orientation.beta, orientation.gamma);
+  return { azimuth: wrap180(direction.heading - heading0), pitch: direction.pitch };
+}
+function headingNow() {
+  return orientation ? cameraDirection(orientation.alpha, orientation.beta, orientation.gamma).heading : null;
+}
+
+async function permissions() {
+  // iPhone asks for motion access only from a tap; Android grants it to HTTPS pages.
+  for (const Sensor of [window.DeviceOrientationEvent, window.DeviceMotionEvent]) {
+    if (typeof Sensor?.requestPermission === 'function') {
+      try { await Sensor.requestPermission(); } catch { /* handled as "no sensors" below */ }
+    }
+  }
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error(window.isSecureContext
+    ? 'This browser cannot open the camera.' : 'The camera needs the trusted HTTPS link from the laptop (see PHONE_SETUP).');
+  stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+  video.srcObject = stream;
+  await video.play();
+  audio = new (window.AudioContext || window.webkitAudioContext)();
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { wakeLock = null; }
+}
+
+async function begin(resumeId) {
+  $('introError').textContent = '';
+  try {
+    await permissions();
+    plan = await api('/api/plan');
+    if (resumeId) {
+      const scan = await api(`/api/scans/${resumeId}`);
+      scanId = scan.id; counts = scan.coverage.counts; order = [];
+      for (const photo of scan.photos) {
+        if (photo.ring === null) continue;
+        const key = `${photo.ring}:${photo.sector}`;
+        (shots[key] ||= []).push({ azimuth: photo.azimuth, pitch: photo.pitch }); order.push(key);
+      }
+      showCount(scan.coverage);
+      if (scan.photos.length) {
+        $('reference').src = `/scans/${scanId}/images/${scan.photos[0].name}`;
+        $('intro').hidden = true; $('realign').hidden = false;
+        return;
+      }
+    } else {
+      scanId = (await api('/api/scans', { method: 'POST' })).id; counts = emptyCounts(); shots = {}; order = [];
+      showCount(null);
+    }
+    localStorage.setItem(STORE, scanId);
+    startScanning();
+  } catch (error) {
+    stream?.getTracks().forEach(track => track.stop());
+    $('introError').textContent = error.name === 'NotAllowedError'
+      ? 'Camera access was blocked. Allow it for this site in the browser settings, then tap Start again.' : error.message;
+  }
+}
+
+function startScanning() {
+  $('intro').hidden = true; $('realign').hidden = true; $('hud').hidden = false; $('target').hidden = false;
+  heading0 = headingNow();  // If the sensors have not reported yet, the first reading in tick() sets it.
+  clearInterval(loop);
+  loop = setInterval(tick, 150);
+}
+
+function checkExposure() {
+  if (!video.videoWidth) return null;
+  probeContext.drawImage(video, 0, 0, probe.width, probe.height);
+  const pixels = probeContext.getImageData(0, 0, probe.width, probe.height).data, luma = new Uint8Array(pixels.length / 4);
+  for (let i = 0; i < luma.length; i++) luma[i] = 0.299 * pixels[4 * i] + 0.587 * pixels[4 * i + 1] + 0.114 * pixels[4 * i + 2];
+  return exposureProblem(luma);
+}
+
+function tick() {
+  if (heading0 === null && orientation) heading0 = headingNow();
+  const now = performance.now(), position = here();
+  if (++ticks % 3 === 0) exposure = checkExposure();
+  const step = nextStep(position, counts, shots, plan);
+  $('arrow').textContent = { left: '⟵', right: '⟶', up: '⤒', down: '⤓', sideways: '⟷' }[step.arrow] || '';
+  drawCoverage(map, 340, plan, counts, position, step.target || (step.kind === 'hold' ? { ring: step.ring, sector: step.sector } : null));
+  if (sticky && now < sticky.until) { /* keep showing the last result */ }
+  else if (exposure) say(exposure, 'bad');
+  else if (inFlight) say('Saving photo…', 'ok');
+  else say(step.text, step.kind === 'hold' || step.kind === 'done' ? 'ok' : 'warn');
+  const steady = !motionSeen || isSteady(motion, now);
+  if (step.kind === 'hold' && !steady && !(sticky && now < sticky.until)) say('Hold still…', 'warn');
+  if (step.kind === 'hold' && steady && !exposure && !inFlight && now - lastCapture > 900) capture(position);
+}
+
+async function capture(position) {
+  if (inFlight || !video.videoWidth) return;
+  inFlight = true; lastCapture = performance.now();
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    const query = position ? `?azimuth=${position.azimuth.toFixed(1)}&pitch=${position.pitch.toFixed(1)}` : '';
+    const result = await api(`/api/scans/${scanId}/photos${query}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+    if (result.accepted) {
+      counts = result.coverage.counts; showCount(result.coverage);
+      if (result.ring !== null) { const key = `${result.ring}:${result.sector}`; (shots[key] ||= []).push(position); order.push(key); }
+      else order.push(null);
+      $('flash').classList.add('on'); setTimeout(() => $('flash').classList.remove('on'), 60);
+      buzz(60); beep(880, 90);
+      stickyAlert(result.coverage.complete ? 'All angles covered. Tap Finish.' : 'Photo saved.', 'ok', 700);
+    } else {
+      buzz([80, 60, 80]); beep(220, 200);
+      stickyAlert(result.reason, 'bad');
+    }
+  } catch (error) {
+    stickyAlert(`Upload failed: ${error.message}. Check the Wi-Fi connection.`, 'bad');
+  } finally {
+    inFlight = false; lastCapture = performance.now();
+  }
+}
+
+$('start').onclick = () => begin(null);
+$('resume').onclick = () => begin(localStorage.getItem(STORE));
+$('realignNow').onclick = () => startScanning();
+$('captureNow').onclick = () => capture(here());
+$('undo').onclick = async () => {
+  try {
+    const result = await api(`/api/scans/${scanId}/photos/last`, { method: 'DELETE' });
+    const key = order.pop();
+    if (key) shots[key]?.pop();
+    counts = result.coverage.counts; showCount(result.coverage);
+    stickyAlert(`Removed ${result.removed}.`, 'warn', 1200);
+  } catch (error) { stickyAlert(error.message, 'bad'); }
+};
+$('finish').onclick = async () => {
+  try {
+    const scan = await api(`/api/scans/${scanId}/finish`, { method: 'POST' });
+    stop();
+    localStorage.removeItem(STORE);
+    $('doneText').textContent = `${scan.photos.length} photos, ${scan.coverage.have} of ${scan.coverage.wanted} angles covered.`;
+    $('hud').hidden = true; $('target').hidden = true; $('arrow').textContent = ''; $('done').hidden = false;
+  } catch (error) { stickyAlert(error.message, 'bad', 3500); }
+};
+$('again').onclick = () => location.reload();
+function stop() {
+  clearInterval(loop);
+  stream?.getTracks().forEach(track => track.stop()); stream = null;
+  wakeLock?.release?.(); wakeLock = null;
+}
+window.addEventListener('pagehide', stop);
+
+(async () => {
+  const saved = localStorage.getItem(STORE);
+  if (!saved) return;
+  try {
+    const scan = await api(`/api/scans/${saved}`);
+    if (!scan.finished) $('resumeBox').hidden = false; else localStorage.removeItem(STORE);
+  } catch { localStorage.removeItem(STORE); }
+})();
+</script>
+</body>
+</html>

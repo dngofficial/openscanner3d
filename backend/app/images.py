@@ -13,8 +13,8 @@ def check_dimensions(image):
         raise ValueError("Use an image of 32–8192 pixels per side and at most 16 megapixels (try your phone's 12 MP mode).")
 
 
-def decode_jpeg(data: bytes, expected_shape=None):
-    if len(data) > MAX_FRAME_BYTES:
+def decode_jpeg(data: bytes, expected_shape=None, max_bytes=MAX_FRAME_BYTES):
+    if len(data) > max_bytes:
         raise ValueError("Frame too large; reduce the capture resolution.")
     with Image.open(io.BytesIO(data)) as image:
         if image.format != "JPEG":

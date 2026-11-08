@@ -9,7 +9,8 @@ import shutil
 import subprocess
 import sys
 
-from backend.app.config import ROOT, load_settings, resolve_tool
+from backend.app.config import ROOT, load_settings, project_path, resolve_tool
+from backend.app.network import certificate_addresses, lan_addresses
 from backend.app.reconstruction import colmap_help
 
 
@@ -25,7 +26,8 @@ def inspect_machine() -> dict:
     settings = load_settings()
     dependencies = {}
     for package, module in (("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("numpy", "numpy"),
-                            ("opencv-python", "cv2"), ("trimesh", "trimesh"), ("httpx", "httpx"), ("Pillow", "PIL")):
+                            ("opencv-python", "cv2"), ("trimesh", "trimesh"), ("httpx", "httpx"), ("Pillow", "PIL"),
+                            ("segno", "segno")):
         try:
             imported = importlib.import_module(module)
             if module == "cv2":
@@ -48,7 +50,14 @@ def inspect_machine() -> dict:
             tools[name] = {"path": executable, **probe([executable, *args])}
     python_ok = sys.version_info[:2] == (3, 11)
     capture_ready = python_ok and all(value["ok"] for key, value in dependencies.items() if key != "httpx")
+    addresses = lan_addresses()
+    certified = certificate_addresses(settings)
+    cert_ok = project_path(settings.tls_cert).is_file() and project_path(settings.tls_key).is_file()
+    phone = {"lan": settings.lan, "port": settings.port, "addresses": addresses, "certificate": cert_ok,
+             "certificate_addresses": certified, "mkcert": shutil.which("mkcert")}
+    phone["ok"] = settings.lan and cert_ok and bool(addresses) and (certified is None or addresses[0] in certified)
     return {
+        "phone_connection": phone,
         "platform": platform.platform(), "python": platform.python_version(), "python_supported": python_ok,
         "mode": settings.mode, "free_disk_gib": round(shutil.disk_usage(ROOT).free / 1024**3, 1),
         "dependencies": dependencies, "tools": tools, "capture_ready": capture_ready,
