@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0f1114">
 <title>OpenScanner 3D · Scan</title>
+<link rel="icon" href="data:,">
 <style>
   :root { --bg:#0f1114; --panel:rgba(15,17,20,.82); --solid:#1b1e23; --line:#3b4047; --ink:#f3efe6; --dim:#a7aaad;
           --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; --radius:14px; }
@@ -37,12 +38,12 @@
          background:rgba(15,17,20,.7); border:2px solid #fff; color:#fff; font-size:34px; font-weight:800; pointer-events:none; }
   .cue.left { left:10px; top:46%; transform:translateY(-50%); } .cue.right { right:10px; top:46%; transform:translateY(-50%); }
   .cue.up { left:50%; top:calc(46% - 31vmin - 74px); transform:translateX(-50%); }
-  .cue.down { left:50%; top:calc(46% + 31vmin + 34px); transform:translateX(-50%); }
+  .cue.down { left:50%; top:min(calc(46% + 31vmin + 34px), calc(100% - 320px)); transform:translateX(-50%); }
   @media (prefers-reduced-motion:no-preference) { .cue { animation:nudge 1s ease-in-out infinite; } }
   @keyframes nudge { 50% { opacity:.55; } }
   #tapMark { position:fixed; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%; border:3px solid #fff;
              background:rgba(63,184,160,.45); box-shadow:0 0 0 3px rgba(0,0,0,.35); pointer-events:none; }
-  #skipTap { margin-top:8px; font-size:14px; min-height:40px; padding:8px 14px; }
+  #skipTap { margin-top:8px; font-size:15px; min-height:44px; padding:12px 16px; }
   #flash { position:fixed; inset:0; border:10px solid var(--ok); opacity:0; transition:opacity .45s; pointer-events:none; }
   #flash.on { opacity:1; transition:none; }
   .bottom { position:absolute; left:10px; right:10px; bottom:max(10px, env(safe-area-inset-bottom)); display:grid;
@@ -50,9 +51,11 @@
   .bottom .dial { grid-area:dial; } .bottom .panel { grid-area:info; } .bottom .bar { grid-area:bar; }
   .dial { position:relative; width:min(34vw, 170px); aspect-ratio:1; background:var(--panel); border-radius:50%; }
   .dial canvas { width:100%; height:100%; display:block; }
-  .dial strong { position:absolute; inset:0; display:grid; place-items:center; font-size:clamp(16px, 5vw, 22px); }
+  .dial strong { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:30%; aspect-ratio:1; border-radius:50%;
+                 display:grid; place-items:center; font-size:clamp(13px, 3.8vw, 18px); background:rgba(15,17,20,.92); }
   .panel { background:var(--panel); backdrop-filter:blur(8px); border-radius:var(--radius); padding:10px; display:grid; gap:8px; }
-  #rings { font-size:13px; color:var(--dim); }
+  #rings { font-size:14px; color:var(--ink); font-weight:600; }
+  #ringsHint { font-size:13px; color:#d6d8db; }
   .bar { background:var(--panel); backdrop-filter:blur(8px); border-radius:var(--radius); padding:8px 10px;
          display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px; }
   .bar .left, .bar .right { display:flex; gap:8px; align-items:center; } .bar .right { justify-content:flex-end; }
@@ -62,6 +65,16 @@
   .toggle { font-size:14px; padding:10px 12px; white-space:nowrap; }
   .toggle[aria-pressed="false"] { opacity:.6; }
   #finish { width:100%; }
+  /* Landscape: one compact row at the bottom so the object stays visible; vertical cues move to the right edge. */
+  @media (orientation:landscape) and (max-height:500px) {
+    .bottom { grid-template-columns:auto minmax(0, 1fr) auto; grid-template-areas:"dial info bar"; align-items:center; }
+    .dial { width:96px; } .dial strong { font-size:12px; width:34%; } #ringsHint { display:none; }
+    .chips { margin-top:4px; } .chip { font-size:12px; padding:2px 8px; }
+    .panel { padding:8px; gap:6px; } #instruction { font-size:17px; padding:10px 14px; }
+    .bar { grid-template-columns:auto auto auto; }
+    #target { top:44%; width:50vmin; height:50vmin; } #target span { display:none; }
+    .cue.up, .cue.down { left:auto; right:10px; top:40%; transform:none; }
+  }
 
   /* ---- sheets ---- */
   .sheet { position:fixed; inset:0; background:var(--bg); overflow:auto; padding:max(28px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); }
@@ -72,13 +85,15 @@
   .steps b { display:block; } .steps span { color:var(--dim); font-size:14px; }
   .sheet > button { width:100%; margin-top:10px; padding:16px; font-size:18px; }
   details { margin-top:22px; background:var(--solid); border-radius:var(--radius); padding:12px 14px; }
-  summary { font-weight:650; cursor:pointer; min-height:28px; }
+  summary { font-weight:650; cursor:pointer; display:list-item; padding:12px 0; }
   .upload { display:block; margin-top:10px; padding:14px; text-align:center; font-weight:650; border:1px solid #4c5159; border-radius:12px; background:#2a2e34; }
   .upload input { position:absolute; opacity:0; width:1px; height:1px; }
+  .upload:focus-within, summary:focus-visible, button:focus-visible { outline:3px solid #6ea8fe; outline-offset:2px; }
   #introError { color:var(--bad); font-weight:600; }
   #reference { width:100%; max-height:42vh; object-fit:contain; border-radius:12px; background:#000; }
   .summary { display:grid; place-items:center; gap:10px; margin:24px 0; }
   .summary .dial { width:200px; background:var(--solid); }
+  .summary .dial strong { font-size:clamp(18px, 5vmin, 26px); width:34%; }
 </style>
 </head>
 <body>
@@ -96,11 +111,11 @@
     </div>
     <button id="skipTap" hidden>Skip: take photos without tapping</button>
   </div>
-  <div id="target"><span>Fill this circle with the object</span></div>
-  <div class="cue left" id="cueLeft" hidden aria-hidden="true">‹</div>
-  <div class="cue right" id="cueRight" hidden aria-hidden="true">›</div>
-  <div class="cue up" id="cueUp" hidden aria-hidden="true">⌃</div>
-  <div class="cue down" id="cueDown" hidden aria-hidden="true">⌄</div>
+  <div id="target"><span id="targetLabel">Fill this circle with the object</span></div>
+  <div class="cue left" id="cueLeft" hidden aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="cue right" id="cueRight" hidden aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="cue up" id="cueUp" hidden aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M5 15l7-7 7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="cue down" id="cueDown" hidden aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path d="M5 9l7 7 7-7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
   <div class="bottom">
     <div class="dial" aria-label="Angle checklist. Outer ring low, inner ring high; the white dot is you.">
       <canvas id="map" width="380" height="380"></canvas>
@@ -108,6 +123,7 @@
     </div>
     <div class="panel">
       <div id="rings">Low 0/12 · Mid 0/12 · High 0/12</div>
+      <div id="ringsHint">Dial: outer ring low, inner ring high</div>
       <button id="finish" disabled>Finish · 0 photos</button>
     </div>
     <div class="bar">
@@ -126,7 +142,7 @@
     <li><svg viewBox="0 0 44 44" aria-hidden="true"><rect x="6" y="28" width="32" height="5" rx="2" fill="#5b6067"/><rect x="17" y="10" width="10" height="18" rx="3" fill="#3fb8a0"/></svg>
       <div><b>Place it on a table you can walk around</b><span>Plain, contrasting surface. It must not move.</span></div></li>
     <li><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="5 4"/><rect x="16" y="11" width="12" height="22" rx="3" fill="#3fb8a0"/></svg>
-      <div><b>Fill the circle, then tap the object</b><span>One tap on screen takes the first photo and tells the AI which object to cut out.</span></div></li>
+      <div><b>Fill the circle, then tap the object</b><span>One tap takes the first photo and marks which object to cut out (the laptop's AI outliner uses it when installed).</span></div></li>
     <li><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="16" fill="none" stroke="#3a3f46" stroke-width="7"/><path d="M22 6a16 16 0 0 1 16 16" fill="none" stroke="#3fb8a0" stroke-width="7"/></svg>
       <div><b>Fill the dial at three heights</b><span>Low, middle and from above. Photos are taken when you hold still.</span></div></li>
   </ol>
@@ -157,7 +173,8 @@
     <div class="dial"><canvas id="doneMap" width="400" height="400"></canvas><strong id="donePercent"></strong></div>
     <p id="doneText"></p>
   </div>
-  <p>Open the scanner page on the laptop to reconstruct and preview the 3D model.</p>
+  <p id="doneNote" hidden></p>
+  <p><b>Next:</b> on the laptop's scanner page, select this scan and press <b>Reconstruct</b> to build and preview the 3D model.</p>
   <button id="again">Start another scan</button>
 </section>
 
@@ -174,7 +191,10 @@ let photos = 0, autoCapture = true, soundOn = localStorage.getItem('scanner-soun
 const STORE = 'scanner-current-scan';
 const MIN_PHOTOS = 12;
 
-function say(text, level = 'warn') { $('instruction').textContent = text; $('instruction').className = level; }
+function say(text, level = 'warn') {  // Only touch the live region when the instruction actually changes.
+  if ($('instruction').textContent !== text) $('instruction').textContent = text;
+  if ($('instruction').className !== level) $('instruction').className = level;
+}
 function stickyAlert(text, level, ms = 2600) { sticky = { text, level, until: performance.now() + ms }; say(text, level); }
 function chip(id, label, level) { const el = $(id); el.textContent = label; el.className = `chip ${level}`; }
 function beep(frequency, ms) {
@@ -274,12 +294,14 @@ async function begin(resumeId) {
   } catch (error) {
     stream?.getTracks().forEach(track => track.stop());
     $('introError').textContent = error.name === 'NotAllowedError'
-      ? 'Camera access was blocked. Allow it for this site in the browser settings, then tap Start again.' : error.message;
+      ? 'Camera access was blocked. Allow the camera for this site in the browser settings and tap Start again, or upload photos below.' : `${error.message} You can upload photos below instead.`;
+    document.querySelector('details').open = true;
   }
 }
 
 function startScanning() {
   $('intro').hidden = true; $('realign').hidden = true; $('hud').hidden = false; $('skipTap').hidden = !awaitingTap;
+  if (awaitingTap) $('targetLabel').textContent = 'Tap the object inside the circle';
   heading0 = headingNow();  // If the sensors have not reported yet, the first reading in tick() sets it.
   showProgress();
   clearInterval(loop);
@@ -297,6 +319,7 @@ function checkExposure() {
 function showCue(arrow) {
   const cues = { left: ['cueLeft'], right: ['cueRight'], up: ['cueUp'], down: ['cueDown'], sideways: ['cueLeft', 'cueRight'] };
   for (const id of ['cueLeft', 'cueRight', 'cueUp', 'cueDown']) $(id).hidden = !(cues[arrow] || []).includes(id);
+  $('targetLabel').hidden = arrow === 'up' || arrow === 'down';  // The vertical cues sit where the label is.
 }
 
 function tick() {
@@ -306,9 +329,10 @@ function tick() {
   const step = nextStep(position, counts, shots, plan);
   const steady = !motionSeen || isSteady(motion, now);
   chip('chipLight', exposure ? 'Light' : 'Light OK', exposure ? 'bad' : 'ok');
-  chip('chipSteady', !motionSeen ? 'Steady' : steady ? 'Steady' : 'Moving', !motionSeen ? '' : steady ? 'ok' : 'warn');
+  chip('chipSteady', !motionSeen ? 'Stability unknown' : steady ? 'Steady' : 'Moving', !motionSeen ? '' : steady ? 'ok' : 'warn');
   chip('chipAngles', position ? 'Angles tracked' : 'No motion sensors', position ? 'ok' : 'warn');
-  showCue(step.arrow);
+  const alerting = sticky && now < sticky.until && sticky.level === 'bad';
+  showCue(alerting || inFlight || awaitingTap ? null : step.arrow);  // No arrows that contradict an error or the tap step.
   drawCoverage(map, 380, plan, counts, position, step.target || (step.kind === 'hold' ? { ring: step.ring, sector: step.sector } : null));
   if (sticky && now < sticky.until) { /* keep showing the last result */ }
   else if (exposure) say(exposure, 'bad');
@@ -332,7 +356,7 @@ function frameFraction(clientX, clientY) {
   const y = (clientY - rect.top - (rect.height - video.videoHeight * scale) / 2) / scale / video.videoHeight;
   return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
 }
-function endTapStep() { awaitingTap = false; $('skipTap').hidden = true; setTimeout(() => { $('tapMark').hidden = true; }, 900); }
+function endTapStep() { awaitingTap = false; $('skipTap').hidden = true; $('targetLabel').textContent = 'Fill this circle with the object'; setTimeout(() => { $('tapMark').hidden = true; }, 900); }
 
 async function capture(position, tap = null) {
   if (inFlight || !video.videoWidth) return;
@@ -404,7 +428,10 @@ $('lastShot').onclick = async () => {
 $('finish').onclick = async () => {
   // Low-angle photos define the object's lower sides; scans taken only from above come out vague there.
   const lowSides = counts?.[0]?.filter(count => count > 0).length ?? 0;
-  if (orientation && lowSides < plan.sectors / 2
+  const share = progress().percent;
+  if (orientation && share < 60 && !confirm(`Only ${share}% of the angles have a photo, so uncovered sides may come out vague. `
+                                           + 'Finish anyway? (Cancel to keep scanning.)')) return;
+  if (orientation && share >= 60 && lowSides < plan.sectors / 2
       && !confirm(`Only ${lowSides} of ${plan.sectors} sides have a low-angle photo (phone near table height). `
                   + 'The bottom of the object will be less accurate. Finish anyway?')) return;
   try {
@@ -418,6 +445,9 @@ $('again').onclick = () => location.reload();
 
 function showDone(scan, text) {
   $('doneText').textContent = text;
+  const share = scan.coverage.wanted ? scan.coverage.have / scan.coverage.wanted : 1;
+  $('doneNote').hidden = share >= 0.6 || !scan.coverage.wanted;
+  $('doneNote').textContent = 'Some angles have no photo, so those sides may come out vague or missing. If they do, scan again and fill the whole dial.';
   $('hud').hidden = true; $('intro').hidden = true; $('done').hidden = false;
   if (plan) {
     drawCoverage($('doneMap').getContext('2d'), 400, plan, scan.coverage.counts);

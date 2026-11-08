@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenScanner 3D</title>
+<link rel="icon" href="data:,">
 <script type="importmap">{"imports": {"three": "/vendor/three/three.module.min.js"}}</script>
 <style>
-  :root { --bg:#121417; --panel:#1b1e22; --raised:#23272c; --line:#33383f; --ink:#ece8df; --dim:#9a9ea2;
+  :root { --bg:#121417; --panel:#1b1e22; --raised:#23272c; --line:#33383f; --ink:#ece8df; --dim:#b4b8bc;
           --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; --info:#6ea8fe; --radius:10px; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -19,23 +20,29 @@
   .pill::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--dim); vertical-align:1px; }
   .pill.ok::before { background:var(--ok); } .pill.warn::before { background:var(--warn); } .pill.bad::before { background:var(--bad); }
   main { display:grid; grid-template-columns:minmax(280px, 360px) minmax(0, 1fr); gap:20px; padding:20px 24px; max-width:1400px; margin:0 auto; }
-  @media (max-width:900px) { main { grid-template-columns:1fr; padding:16px; } }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; }
+  main > * { min-width:0; }  /* grid items may shrink below their content width */
+  @media (max-width:900px) { main { grid-template-columns:1fr; padding:16px; } #scans { max-height:55vh; overflow-y:auto; } #detail { order:-1; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; scroll-margin-top:96px; }
   .stack { display:grid; gap:20px; align-content:start; }
   button, a.button { font:inherit; font-weight:600; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px;
                      padding:8px 12px; text-decoration:none; cursor:pointer; display:inline-flex; align-items:center; gap:6px; min-height:36px; }
-  button.go { background:var(--ok); border-color:var(--ok); color:#06201b; }
+  button.go, a.button.go { background:var(--ok); border-color:var(--ok); color:#06201b; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; }
   button[aria-pressed="true"] { background:#2f4a44; border-color:var(--ok); }
   button:disabled { opacity:.5; cursor:default; }
   button:focus-visible, a.button:focus-visible, .scan:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
   /* connect */
-  .connect { display:grid; grid-template-columns:auto 1fr; gap:16px; align-items:start; }
-  .connect.compact { grid-template-columns:1fr; }
-  #qr svg { display:block; width:180px; height:180px; border-radius:6px; }
+  .connect { display:grid; gap:14px; }
+  #qr svg { display:block; width:min(220px, 100%); height:auto; margin:0 auto; border-radius:8px; }
   .connect.compact #qr { display:none; }
+  #qr.untrusted svg { opacity:.3; }
+  #qrNote { text-align:center; font-weight:600; color:var(--warn); margin:6px 0 0; }
   .problem { color:var(--warn); margin:4px 0; }
   code { background:#0e1013; padding:2px 6px; border-radius:4px; word-break:break-all; font-size:12px; }
+  #problems .steps { margin:6px 0; padding-left:22px; display:grid; gap:4px; }
+  .problem code, .steps code { display:block; margin:6px 0; padding:6px 8px; white-space:nowrap; overflow-x:auto; word-break:normal; color:var(--ink); }
   .meta { color:var(--dim); font-size:13px; }
+  p.meta, .rebuild .meta { font-size:14px; }
   /* scan list */
   #scans { display:grid; gap:8px; }
   .scan { display:grid; grid-template-columns:64px 1fr; gap:12px; align-items:center; padding:10px; border-radius:8px; border:1px solid transparent;
@@ -46,34 +53,49 @@
   .badge { display:inline-block; font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; margin-top:4px; }
   .badge.capturing { background:#3d3220; color:var(--warn); } .badge.ready { background:#1f3a35; color:var(--ok); }
   .badge.running { background:#1f2c3f; color:var(--info); } .badge.failed { background:#3d2220; color:var(--bad); }
-  .badge.saved { background:#2a2d31; color:var(--ink); }
+  .badge.saved, .badge.idle { background:#2a2d31; color:var(--ink); }
   .empty { color:var(--dim); text-align:center; padding:24px 8px; }
   /* detail */
+  .scanpick { display:none; flex-basis:100%; min-width:0; max-width:100%; align-items:center; gap:8px; }
+  @media (max-width:900px) { .scanpick { display:flex; } .scanpick select { flex:1 1 0; width:0; min-width:0; } }
   .detail-head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
   #viewerBox { position:relative; margin-top:12px; border-radius:var(--radius); overflow:hidden; background:#0e1013; border:1px solid var(--line); }
   #viewer canvas { display:block; }
   #viewerEmpty { padding:48px 16px; text-align:center; color:var(--dim); }
   .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
-  select { font:inherit; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px; padding:7px 10px; min-height:36px; }
-  .facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-top:12px; }
+  select { font:inherit; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px; padding:7px 10px; min-height:36px; max-width:100%; min-width:0; }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; margin-top:12px; }
   .fact { background:var(--raised); border-radius:8px; padding:10px; } .fact b { display:block; font-size:18px; }
   .downloads { display:flex; flex-wrap:wrap; gap:8px; }
-  .thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px, 1fr)); gap:6px; }
+  .thumbs { display:grid; grid-template-columns:repeat(6, 1fr); gap:6px; }  /* 6, 9 or 12 columns: 36 photos fill whole rows */
+  @media (min-width:1100px) { .thumbs { grid-template-columns:repeat(9, 1fr); } }
+  @media (min-width:1300px) { .thumbs { grid-template-columns:repeat(12, 1fr); } }
+  .gallery > summary { cursor:pointer; font-size:14px; font-weight:600; color:var(--dim); padding:10px 0; margin-top:8px; }
+  .checkhint { color:var(--ink); font-size:14px; margin:4px 0 8px; }
   .rebuild { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; padding:10px; background:var(--raised); border-radius:8px; }
-  .rebuild .meta { flex:1 1 220px; }
-  .masks img { aspect-ratio:auto; object-fit:contain; }
-  .thumbs img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; background:#000; }
+  .rebuild .meta { flex:1 1 100%; margin:0; }
+  .rebuild select { flex:1 1 200px; }
+  .thumbs img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; background:#000; display:block; }
+  .thumbs.masks img { aspect-ratio:auto; object-fit:contain; }
+  @media (min-width:700px) { .thumbs.masks { grid-template-columns:repeat(9, 1fr); } }
+  @media (min-width:1300px) { .thumbs.masks { grid-template-columns:repeat(12, 1fr); } }
+  .thumbs a { display:block; border-radius:4px; }
+  .thumbs a:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
+  .more { margin-top:8px; } .more summary { cursor:pointer; color:var(--dim); font-weight:600; padding:6px 0; }
+  .hint { color:var(--dim); font-size:13px; flex-basis:100%; }
   .spinner { width:14px; height:14px; border:2px solid var(--info); border-right-color:transparent; border-radius:50%; display:inline-block; }
   @media (prefers-reduced-motion:no-preference) { .spinner { animation:spin 1s linear infinite; } }
   @keyframes spin { to { transform:rotate(360deg); } }
   #status { margin-top:10px; }
+  /* Touch-sized controls on small or touch screens (after the base rules so it wins). */
+  @media (max-width:600px), (pointer:coarse) { button, a.button, select, .more summary, .gallery > summary { min-height:44px; } }
   [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <header>
   <div class="brand"><h1>OpenScanner 3D</h1><span>Local 3D object scanner</span></div>
-  <div class="pills" aria-live="polite">
+  <div class="pills">
     <span class="pill" id="pillMode">Mode</span>
     <span class="pill" id="pillPhone">Phone</span>
   </div>
@@ -83,7 +105,7 @@
     <section aria-labelledby="connectTitle">
       <h2 id="connectTitle">Connect a phone</h2>
       <div class="connect" id="connect">
-        <div id="qr" aria-label="QR code with the phone link"></div>
+        <div><div id="qr" role="img" aria-label="QR code with the phone link"></div><p id="qrNote" hidden>Not trusted yet: fix the problem below first.</p></div>
         <div>
           <p id="connectHelp" class="meta">Loading…</p>
           <div id="problems"></div>
@@ -97,14 +119,15 @@
       <div id="scans"><p class="empty">No scans yet. Scan the QR code with your phone and tap Start scanning.</p></div>
     </section>
   </div>
-  <section id="detail" aria-live="polite">
+  <section id="detail">
     <div id="detailEmpty" class="empty">Select a scan to see its photos, status and 3D model.</div>
     <div id="detailBody" hidden>
       <div class="detail-head">
         <div><h2 id="detailTitle" style="margin:0"></h2><span id="detailBadge" class="badge"></span></div>
-        <div id="actions"></div>
+        <label class="scanpick"><span class="meta">Scan</span> <select id="scanPick" aria-label="Choose a scan"></select></label>
+        <div id="actions" class="actions"></div>
       </div>
-      <p id="status" class="meta"></p>
+      <p id="status" class="meta" role="status" aria-live="polite"></p>
       <div id="viewerBox">
         <div id="viewer"></div>
         <div id="viewerEmpty">No 3D model yet.</div>
@@ -116,23 +139,25 @@
         <button id="spin" aria-pressed="false">Turntable</button>
         <button id="resetView">Reset view</button>
         <span class="meta" id="modelStats"></span>
+        <span class="hint" id="viewerHint">Drag to rotate · scroll to zoom · right-drag to pan</span>
       </div>
       <div class="rebuild" id="rebuild" hidden>
         <label for="detailLevel"><b>Game asset detail</b></label>
         <select id="detailLevel"></select>
         <button id="rebuildGo">Rebuild object</button>
-        <span class="meta">Re-meshes the object from this scan's existing camera poses and masks; COLMAP does not rerun. The current files stay if it fails.</span>
+        <p class="meta" id="rebuildNote">Rebuilds only the object, reusing this scan's camera positions and outlines (about a minute). The current files stay if it fails.</p>
       </div>
       <div class="facts" id="facts"></div>
+      <div id="masksBox" hidden>
+        <h3>Check the green outlines</h3>
+        <p class="checkhint">If the green misses part of the object in some photos, the model will miss it too: rescan and tap the object on the first photo.</p>
+        <p class="meta" id="masksText"></p>
+        <details class="gallery" id="maskGallery" open><summary id="maskSummary">Outlines</summary><div class="thumbs masks" id="maskThumbs"></div></details>
+      </div>
       <h3>Downloads</h3>
       <div class="downloads" id="downloads"></div>
-      <div id="masksBox" hidden>
-        <h3>Object masks</h3>
-        <p class="meta" id="masksText"></p>
-        <div class="thumbs masks" id="maskThumbs"></div>
-      </div>
-      <h3>Photos</h3>
-      <div class="thumbs" id="thumbs"></div>
+      <details class="more" id="moreBox" hidden><summary>More formats</summary><div class="downloads" id="moreDownloads"></div></details>
+      <details class="gallery"><summary id="photoSummary">Photos</summary><div class="thumbs" id="thumbs"></div></details>
     </div>
   </section>
 </main>
@@ -140,13 +165,15 @@
 import { drawCoverage } from '/guidance.mjs';
 const $ = id => document.getElementById(id);
 let details = null;
-let plan = null, mode = 'capture', selected = null, viewer = null, loadedModel = null, qrForced = false;
+let plan = null, mode = 'capture', selected = null, viewer = null, loadedModel = null, qrForced = false, phoneConnected = false;
+let listKey = '', actionsKey = '', actionError = '', offline = false;
 const LABELS = {
-  'object.glb': 'Object · GLB', 'object_hires.glb': 'Object, high detail · GLB', 'object.obj': 'Object · OBJ',
-  'object.mtl': 'Object material · MTL', 'object_albedo.png': 'Object texture · PNG', 'mesh.glb': 'Whole scene · GLB',
-  'mesh.obj': 'Whole scene · OBJ', 'scan.zip': 'Photos + angles · ZIP', 'colmap.log': 'COLMAP log',
+  'object.glb': 'Game asset (GLB)', 'object_hires.glb': 'Object, high detail (GLB)', 'object.obj': 'Object (OBJ)',
+  'object.mtl': 'Object material (MTL, goes with OBJ)', 'object_albedo.png': 'Object texture (PNG)', 'mesh.glb': 'Whole scene (GLB)',
+  'mesh.obj': 'Whole scene (OBJ)', 'scan.zip': 'Photos + angles (ZIP)', 'colmap.log': 'Reconstruction log',
 };
-const MODELS = [['object.glb', 'Object'], ['object_hires.glb', 'Object (high detail)'], ['mesh.glb', 'Whole scene']];
+const PRIMARY = ['object.glb', 'scan.zip'];
+const MODELS = [['object.glb', 'Game asset'], ['object_hires.glb', 'High detail'], ['mesh.glb', 'Whole scene']];
 
 async function json(path, options) {
   const response = await fetch(path, options);
@@ -158,7 +185,7 @@ function pill(id, text, level) { const el = $(id); el.textContent = text; el.cla
 
 function state(scan) {
   const status = scan.status?.state;
-  if (!scan.finished) return ['capturing', 'Capturing on phone'];
+  if (!scan.finished) return phoneConnected && scan.photos.length ? ['capturing', 'Capturing on phone'] : ['idle', 'Not finished'];
   if (status === 'running') return ['running', 'Reconstructing'];
   if (status === 'ready') return ['ready', 'Model ready'];
   if (status === 'failed' || status === 'interrupted') return ['failed', status === 'failed' ? 'Failed' : 'Interrupted'];
@@ -169,9 +196,9 @@ async function loadConnect() {
   try {
     const info = await json('/api/connect');
     mode = info.mode;
-    pill('pillMode', mode === 'reconstruct' ? 'Reconstruct mode' : 'Capture mode', mode === 'reconstruct' ? 'ok' : '');
+    pill('pillMode', mode === 'reconstruct' ? 'Ready to build 3D models' : 'Capture only (build models on the GPU laptop)', mode === 'reconstruct' ? 'ok' : '');
     const seen = info.phone_seen_seconds;
-    const connected = seen !== null && seen !== undefined && seen < 30;
+    const connected = phoneConnected = seen !== null && seen !== undefined && seen < 30;
     pill('pillPhone', connected ? `Phone connected · ${seen}s ago` : info.lan ? 'No phone yet' : 'Phone access off', connected ? 'ok' : 'warn');
     $('qr').innerHTML = info.qr_svg || '';
     const usable = info.lan && info.urls.length && info.qr_svg;
@@ -181,10 +208,29 @@ async function loadConnect() {
     $('connectHelp').textContent = !usable ? 'The phone cannot connect yet:'
       : connected ? 'A phone is connected. Scan the QR code again on another phone if needed.'
       : 'Scan this QR code with the phone camera (same Wi-Fi), or open the link below in Safari or Chrome.';
-    $('problems').replaceChildren(...info.problems.map(text => Object.assign(document.createElement('p'), { className: 'problem', textContent: text })));
+    const untrusted = !!(usable && info.problems.length);
+    $('connectHelp').hidden = untrusted && !connected;  // The QR caption already says to fix the problem first.
+    $('qr').classList.toggle('untrusted', untrusted); $('qrNote').hidden = !untrusted || $('connect').classList.contains('compact');
+    $('problems').replaceChildren(...info.problems.map(text => {
+      // "…. Stop the scanner, run <command>, then start it again. (details)" -> sentence, numbered steps, muted details.
+      const box = document.createElement('div');
+      const match = text.match(/^(.*?)\s*Stop the scanner, run (\S+ -m scripts\.make_cert), then start it again\.\s*(.*)$/);
+      if (!match) { box.append(Object.assign(document.createElement('p'), { className: 'problem', textContent: text })); return box; }
+      const steps = document.createElement('ol'); steps.className = 'steps';
+      for (const step of ['Stop the scanner (Ctrl+C in its window).', 'Run:', 'Start the scanner again and reload this page.'])
+        steps.append(Object.assign(document.createElement('li'), { textContent: step }));
+      steps.children[1].append(Object.assign(document.createElement('code'), { textContent: match[2] }));
+      box.append(Object.assign(document.createElement('p'), { className: 'problem', textContent: match[1] }), steps);
+      if (match[3]) box.append(Object.assign(document.createElement('p'), { className: 'meta', textContent: match[3] }));
+      return box;
+    }));
     $('urls').replaceChildren(...(usable ? info.urls.slice(0, 1) : []).map(url => Object.assign(document.createElement('code'), { textContent: url })));
-  } catch {
-    $('connectHelp').textContent = 'Open this page on the laptop itself (localhost) to see the phone link.';
+  } catch (error) {
+    // 403 = opened from another device; anything else = the scanner did not answer.
+    $('connectHelp').textContent = /\(403\)|Forbidden/.test(error.message)
+      ? 'The phone link is only shown on the laptop itself (https://localhost:8443).'
+      : 'The scanner is not responding. Check that it is still running, then reload this page.';
+    $('qr').innerHTML = ''; $('urls').replaceChildren(); $('problems').replaceChildren(); $('qrNote').hidden = true;
   }
 }
 $('toggleQr').onclick = () => { qrForced = !qrForced; loadConnect(); };
@@ -202,7 +248,7 @@ function listItem(scan) {
   text.querySelector('.meta').textContent = `${scan.photos.length} photos · ${Math.round(100 * scan.coverage.have / scan.coverage.wanted)}% of angles`;
   text.querySelector('.badge').textContent = label;
   item.append(canvas, text);
-  item.onclick = () => { selected = scan.id; refresh(); };
+  item.onclick = () => { selected = scan.id; actionError = ''; listKey = ''; refresh(); };
   return item;
 }
 
@@ -237,28 +283,42 @@ function renderDetail(scan) {
   $('detailTitle').textContent = scan.created ? new Date(scan.created).toLocaleString() : scan.id;
   $('detailBadge').className = `badge ${kind}`; $('detailBadge').textContent = label;
   const status = scan.status;
-  $('status').innerHTML = '';
-  if (status?.state === 'running') $('status').innerHTML = '<span class="spinner"></span> ';
-  $('status').append(status?.message || (scan.finished ? '' : 'The phone is still capturing; this page updates as photos arrive.'));
-  const actions = [];
-  if (scan.finished && mode === 'reconstruct' && status?.state !== 'running') {
-    const go = Object.assign(document.createElement('button'), {
-      className: 'go', textContent: status?.state === 'ready' ? 'Reconstruct again' : status ? 'Retry reconstruction' : 'Reconstruct' });
-    go.onclick = async () => {
-      go.disabled = true;
-      try { await json(`/api/scans/${scan.id}/reconstruct`, { method: 'POST' }); } catch (error) { $('status').textContent = error.message; }
-      refresh();
-    };
-    actions.push(go);
+  const message = actionError || status?.message || (scan.finished ? ''
+    : scan.photos.length ? 'Not finished on the phone yet. This page updates as photos arrive.' : 'No photos yet.');
+  const statusKey = `${status?.state}|${message}`;
+  if ($('status').dataset.key !== statusKey) {  // Only touch the live region when the text changes.
+    $('status').dataset.key = statusKey;
+    $('status').innerHTML = status?.state === 'running' && !actionError ? '<span class="spinner" aria-hidden="true"></span> ' : '';
+    $('status').append(message);
+    $('status').style.color = actionError ? 'var(--bad)' : '';
   }
-  $('actions').replaceChildren(...actions);
+  const ready = status?.state === 'ready' && scan.files.includes('object.glb');
+  const actionKey = `${scan.id}|${scan.finished}|${status?.state}|${mode}|${ready}`;
+  if (actionKey !== actionsKey) {  // Rebuilding the buttons every poll would steal keyboard focus.
+    actionsKey = actionKey;
+    const actions = [];
+    if (ready) actions.push(Object.assign(document.createElement('a'), {
+      className: 'button go', href: `/scans/${scan.id}/object.glb`, download: '', textContent: 'Download game asset (GLB)' }));
+    if (scan.finished && mode === 'reconstruct' && status?.state !== 'running') {
+      const go = Object.assign(document.createElement('button'), {
+        className: ready ? '' : 'go', textContent: status?.state === 'ready' ? 'Reconstruct again' : status ? 'Retry reconstruction' : 'Reconstruct' });
+      go.onclick = async () => {
+        go.disabled = true; actionError = '';
+        try { await json(`/api/scans/${scan.id}/reconstruct`, { method: 'POST' }); }
+        catch (error) { actionError = `Could not start: ${error.message}`; go.disabled = false; }
+        refresh();
+      };
+      actions.push(go);
+    }
+    $('actions').replaceChildren(...actions);
+  }
   const models = MODELS.filter(([file]) => scan.files.includes(file));
   $('viewerTools').hidden = !models.length; $('viewerEmpty').hidden = !!models.length; $('viewer').hidden = !models.length;
   if (models.length) {
     const current = $('model').value;
     $('model').replaceChildren(...models.map(([file, name]) => new Option(name, file)));
     $('model').value = models.some(([file]) => file === current) ? current : models[0][0];
-    $('model').dataset.version = status?.finished || '';  // Reload after a rebuild replaces the files.
+    $('model').dataset.version = `${status?.finished || ''}|${scan.object?.detail}|${scan.object?.triangles}`;  // Reload when files change.
     showModel(scan.id, $('model').value, $('model').dataset.version);
   } else {
     $('viewerEmpty').textContent = !scan.finished ? 'Finish the scan on the phone first.'
@@ -271,7 +331,7 @@ function renderDetail(scan) {
   $('facts').innerHTML = '';
   for (const [value, name] of [[scan.photos.length, 'photos'], [`${covered}%`, 'angles covered'],
                                 [scan.size ? `${scan.size[0]}×${scan.size[1]}` : '–', 'photo size'],
-                                [scan.coverage.unguided || 0, 'without angle data'],
+                                ...(scan.coverage.unguided ? [[scan.coverage.unguided, 'uploaded photos (no angle data)']] : []),
                                 ...(scan.object?.triangles ? [[scan.object.triangles.toLocaleString(), `triangles · ${scan.object.detail} detail`]] : [])]) {
     const fact = document.createElement('div'); fact.className = 'fact';
     fact.innerHTML = '<b></b><span class="meta"></span>';
@@ -279,9 +339,19 @@ function renderDetail(scan) {
     $('facts').append(fact);
   }
   const files = [...scan.files].sort((a, b) => Object.keys(LABELS).indexOf(a) - Object.keys(LABELS).indexOf(b));
-  $('downloads').replaceChildren(...(files.length ? files.map(file => Object.assign(document.createElement('a'), {
-    className: 'button', href: `/scans/${scan.id}/${file}`, textContent: LABELS[file] || file, download: '' }))
-    : [Object.assign(document.createElement('span'), { className: 'meta', textContent: 'Nothing to download yet.' })]));
+  const link = file => Object.assign(document.createElement('a'), {
+    className: 'button', href: `/scans/${scan.id}/${file}`, textContent: LABELS[file] || file, download: '' });
+  const filesKey = `${scan.id}|${files.join()}`;
+  if ($('downloads').dataset.key !== filesKey) {
+    $('downloads').dataset.key = filesKey;
+    const main = files.filter(file => PRIMARY.includes(file)), more = files.filter(file => !PRIMARY.includes(file));
+    $('downloads').replaceChildren(...(files.length ? main.map(link)
+      : [Object.assign(document.createElement('span'), { className: 'meta', textContent: 'Nothing to download yet.' })]));
+    $('moreDownloads').replaceChildren(...more.map(link));
+    $('moreBox').hidden = !more.length;
+    $('moreBox').open = !main.length && more.length > 0;
+  }
+  $('photoSummary').textContent = `Photos (${scan.photos.length})`;
   const shown = $('thumbs').dataset.key, key = `${scan.id}:${scan.photos.length}`;
   if (shown !== key) {
     $('thumbs').dataset.key = key;
@@ -298,19 +368,27 @@ function renderRebuild(scan) {
   if (!$('detailLevel').options.length) {
     const names = { low: 'Low poly', standard: 'Standard', high: 'High' };
     $('detailLevel').replaceChildren(...Object.entries(details).map(([key, value]) =>
-      new Option(`${names[key] || key} · ${value.triangles.toLocaleString()} triangles · ${value.texture} px texture`, key)));
+      new Option(`${names[key] || key} (${value.triangles.toLocaleString()} triangles)`, key)));
+    $('detailLevel').onchange = () => { $('rebuildNote').textContent = rebuildNote(); };
   }
   if ($('rebuild').dataset.scan !== scan.id) {
     $('rebuild').dataset.scan = scan.id;
     $('detailLevel').value = scan.object?.detail || 'standard';
+    $('rebuildNote').textContent = rebuildNote();
   }
   $('rebuildGo').onclick = async () => {
     $('rebuildGo').disabled = true;
+    actionError = '';
     try { await json(`/api/scans/${scan.id}/object?detail=${$('detailLevel').value}`, { method: 'POST' }); }
-    catch (error) { $('status').textContent = error.message; }
+    catch (error) { actionError = `Could not rebuild: ${error.message}`; }
     $('rebuildGo').disabled = false;
     refresh();
   };
+}
+
+function rebuildNote() {
+  const value = details?.[$('detailLevel').value];
+  return `${value ? `${value.texture} px texture. ` : ''}Rebuilds only the object, reusing this scan's camera positions and outlines (about a minute). The current files stay if it fails.`;
 }
 
 function renderMasks(scan) {
@@ -318,32 +396,56 @@ function renderMasks(scan) {
   $('masksBox').hidden = !masks;
   if (!masks) return;
   const total = (masks.sam2 || 0) + (masks.grabcut || 0);
+  const tapped = /tapped/.test(masks.prompt || '');
   const parts = masks.sam2
-    ? [`SAM 2 (pretrained segmentation, run on this laptop) outlined the object in ${masks.sam2} of ${total} photos`
-       + (masks.grabcut ? `; GrabCut kept ${masks.grabcut} where SAM 2 disagreed with the photo outline` : ''),
-       `prompted by ${masks.prompt}`, masks.device ? `${masks.device.toUpperCase()}, ${masks.seconds} s` : '']
-    : [`GrabCut outlines (classical computer vision) in all ${total} photos`, masks.note || ''];
-  $('masksText').textContent = parts.filter(Boolean).join(' · ') + '. Green = object used for the 3D shape and texture.';
-  const key = `${scan.id}:${scan.status?.finished || ''}`;
+    ? [`SAM 2, a pretrained AI segmentation model running on this laptop, outlined the object in ${masks.sam2} of ${total} photos`
+       + (masks.grabcut ? ` (the other ${masks.grabcut} kept the basic outline, where SAM 2 disagreed with it)` : '') + '.',
+       tapped ? 'It was pointed at the object you tapped on the phone.'
+              : 'No tap was recorded for this scan, so it was pointed at the object\'s estimated centre.',
+       masks.device ? `Took ${masks.seconds} s on the ${masks.device.toUpperCase()}.` : '']
+    : [`Basic outlines (classical computer vision, no AI) in all ${total} photos.`, masks.note || ''];
+  $('maskSummary').textContent = `Outlines (${total})`;
+  $('masksText').textContent = `${parts.filter(Boolean).join(' ')} Green = the part used for the 3D shape and texture. Select a photo to see its outline enlarged.`;
+  const key = `${scan.id}:${scan.status?.finished || ''}:${masks.seconds}`;
   if ($('maskThumbs').dataset.key === key) return;
   $('maskThumbs').dataset.key = key;
-  $('maskThumbs').replaceChildren(...scan.photos.map(photo => Object.assign(document.createElement('img'), {
-    src: `/scans/${scan.id}/masks/${photo.name}?v=${encodeURIComponent(scan.status?.finished || '')}`, loading: 'lazy',
-    alt: `Object mask for ${photo.name}` })));
-  for (const image of $('maskThumbs').querySelectorAll('img')) image.onerror = () => image.remove();  // Unregistered photos have no mask.
+  $('maskThumbs').replaceChildren(...scan.photos.map(photo => {
+    const src = `/scans/${scan.id}/masks/${photo.name}?v=${encodeURIComponent(scan.status?.finished || '')}`;
+    const anchor = Object.assign(document.createElement('a'), { href: src, target: '_blank', rel: 'noopener', title: `Enlarge the outline of ${photo.name}` });
+    anchor.setAttribute('aria-label', `Enlarge the outline of ${photo.name}`);
+    const image = Object.assign(document.createElement('img'), { src, loading: 'lazy', alt: `Object outline for ${photo.name}` });
+    image.onerror = () => anchor.remove();  // Photos COLMAP could not place have no outline.
+    anchor.append(image);
+    return anchor;
+  }));
 }
 
 async function refresh() {
   try {
     plan ??= await json('/api/plan');
     details ??= (await json('/api/health')).details;
-    const scans = await json('/api/scans');
+    const all = await json('/api/scans');
+    if (offline) { offline = false; loadConnect(); }
+    // Empty unfinished scans (phone opened, nothing taken) are noise; keep the newest and the selected one.
+    const scans = all.filter((scan, index) => index === 0 || scan.id === selected || scan.finished || scan.photos.length);
     if (!scans.length) return;
     selected ??= scans[0].id;
-    $('scans').replaceChildren(...scans.map(listItem));
+    const key = JSON.stringify([selected, phoneConnected, mode, scans.map(s => [s.id, s.finished, s.status?.state, s.photos.length])]);
+    if (key !== listKey) {  // Keeps focus while idle.
+      listKey = key;
+      $('scans').replaceChildren(...scans.map(listItem));
+      $('scanPick').replaceChildren(...scans.map(scan => new Option(
+        `${scan.created ? new Date(scan.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : scan.id} · ${state(scan)[1]}`, scan.id)));
+      $('scanPick').value = selected;
+    }
     renderDetail(scans.find(scan => scan.id === selected) || null);
-  } catch { /* keep the last view; the server may be restarting */ }
+  } catch {
+    offline = true;
+    pill('pillMode', 'Scanner not responding · retrying', 'bad');
+  }
 }
+$('scanPick').onchange = () => { selected = $('scanPick').value; actionError = ''; listKey = ''; refresh(); };
+if (matchMedia('(pointer: coarse)').matches) $('viewerHint').textContent = 'Drag to rotate · pinch to zoom · two-finger drag to pan';
 loadConnect(); refresh();
 setInterval(refresh, 3000); setInterval(loadConnect, 5000);
 </script>

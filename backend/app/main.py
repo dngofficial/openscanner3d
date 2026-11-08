@@ -99,18 +99,20 @@ def connect(request: Request):
     certified = network.certificate_addresses(SETTINGS)
     problems = []
     if not SETTINGS.lan:
-        problems.append('LAN mode is off. Set lan = true in config.local.toml and restart, so the phone can connect.')
+        problems.append('Phone access is off. Set lan = true in config.local.toml, then restart the scanner.')
     if not project_path(SETTINGS.tls_cert).is_file() or not project_path(SETTINGS.tls_key).is_file():
-        problems.append("No HTTPS certificate yet. Run: .venv/Scripts/python.exe -m scripts.make_cert")
+        problems.append("No HTTPS certificate yet, so the phone cannot open the camera. Stop the scanner, run "
+                        ".venv/Scripts/python.exe -m scripts.make_cert, then start it again.")
     elif certified is not None and addresses and addresses[0] not in certified:
-        problems.append(f"This laptop's address {addresses[0]} is not in the certificate ({', '.join(certified)}). "
-                        "Rerun scripts.make_cert after changing networks.")
+        problems.append(f"The laptop's Wi-Fi address changed to {addresses[0]}, so the phone will not trust this link. "
+                        "Stop the scanner, run .venv/Scripts/python.exe -m scripts.make_cert, then start it again. "
+                        f"(The certificate covers {', '.join(certified)}.)")
     if not addresses:
         problems.append("No private network address found. Connect the laptop to the same Wi-Fi as the phone.")
     svg = None
     if urls and SETTINGS.lan and project_path(SETTINGS.tls_cert).is_file():  # Never show a link that cannot work.
         import segno
-        svg = segno.make(urls[0], error="m").svg_inline(scale=6, border=2, dark="#000", light="#fff")
+        svg = segno.make(urls[0], error="m").svg_inline(border=4, dark="#000", light="#fff", omitsize=True)  # viewBox: scales, never crops
     seen = round(time.monotonic() - phone_seen) if phone_seen else None
     return dict(lan=SETTINGS.lan, urls=urls, qr_svg=svg, problems=problems, mode=SETTINGS.mode, phone_seen_seconds=seen)
 
@@ -281,11 +283,15 @@ def start_reconstruction(scan_id: str):
         raise HTTPException(409, "This laptop is in capture mode. Download scan.zip and reconstruct on the GPU laptop.")
     if _heavy_job.locked():
         raise HTTPException(409, "Another reconstruction is running.")
-    write(scan / "status.json", dict(state="running", started=now(), message="COLMAP reconstruction running."))
+    started = now()
+    write(scan / "status.json", dict(state="running", started=started, message="Starting reconstruction."))
+
+    def stage(text):
+        write(scan / "status.json", dict(state="running", started=started, message=text))
 
     def run():
         try:
-            result = reconstruct(scan / "images", scan, SETTINGS)
+            result = reconstruct(scan / "images", scan, SETTINGS, stage)
             state = "ready" if result.get("model_ready") else "failed"
             write(scan / "status.json", dict(state=state, finished=now(), message=result.get("msg", "")))
         except Exception:
@@ -306,12 +312,15 @@ def start_object_rebuild(scan_id: str, detail: str = Query(..., pattern="^(low|s
     if _heavy_job.locked():
         raise HTTPException(409, "Another reconstruction is running.")
     triangles, texture = DETAIL[detail]
-    write(scan / "status.json", dict(state="running", started=now(),
-                                     message=f"Rebuilding the object: {detail} detail ({triangles} triangles, {texture} px texture)."))
+    started, intro = now(), f"Rebuilding the object at {detail} detail ({triangles:,} triangles, {texture} px texture)."
+    write(scan / "status.json", dict(state="running", started=started, message=intro))
+
+    def stage(text):
+        write(scan / "status.json", dict(state="running", started=started, message=f"{intro} {text.split(': ', 1)[-1][:1].upper()}{text.split(': ', 1)[-1][1:]}"))
 
     def run():
         try:
-            result = rebuild_object(scan, SETTINGS, detail)
+            result = rebuild_object(scan, SETTINGS, detail, stage)
             write(scan / "status.json", dict(state="ready" if result.get("done") else "failed", finished=now(),
                                              message=result.get("msg", "")))
         except Exception:

@@ -197,7 +197,7 @@ def save_previews(photos: dict, masks: dict, info: dict, folder: Path):
         overlay = photo.astype(np.float32)
         overlay[~mask] *= .3
         overlay[mask] = overlay[mask] * .7 + np.array([120, 200, 80], np.float32) * .3  # BGR green tint.
-        scale = 360 / max(photo.shape[:2])
+        scale = min(1.0, 1280 / max(photo.shape[:2]))  # Large enough to inspect the outline edge when enlarged.
         small = cv2.resize(overlay.astype(np.uint8), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         cv2.imwrite(str(folder / name), small, [cv2.IMWRITE_JPEG_QUALITY, 82])
     summary = {key: value for key, value in info.items() if key != "scores"}

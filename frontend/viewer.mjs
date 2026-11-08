@@ -10,8 +10,8 @@ export function createViewer(container) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   container.append(renderer.domElement);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0e1013);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x404048, 2.2));
+  scene.background = new THREE.Color(0x2a2e34);  // Mid grey: dark objects keep a readable silhouette.
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x404048, 2.6));
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(1, 2, 3);
   scene.add(sun);

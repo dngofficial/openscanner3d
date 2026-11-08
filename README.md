@@ -172,6 +172,14 @@ These cover:
 - config validation and the COLMAP adapter (mocked COLMAP, real subprocess time limits);
 - the object step on a synthetic scene with known geometry: carving, game asset, SAM 2 prompts (boxes, tap ray), per-photo fallback, mask cache reuse, low-poly budgets that stay watertight. SAM 2 itself is a stand-in in these tests; it was checked on the real scan above.
 
+**UI/UX review harness** (dev only, needs a running scanner with one reconstructed scan): `tests/ui_review/review.py` drives the phone page in Edge with a simulated camera (real scan photos) and simulated motion sensors, and the dashboard at 1440/1024/390 px. It saves screenshots of every state plus automated checks: cut-off content, horizontal scroll, WCAG contrast, touch-target size, accessible names, focus visibility, console and HTTP errors. The scoring rubric is [docs/UX_REVIEW.md](docs/UX_REVIEW.md). Setup and run:
+```powershell
+py -3.11 -m venv .venv-review; .venv-review/Scripts/python.exe -m pip install playwright==1.49.1
+```
+```powershell
+.venv-review/Scripts/python.exe tests/ui_review/review.py --base http://localhost:8000 --out data/ui_review/latest
+```
+
 The phone page was also driven in a browser with a synthetic camera and simulated orientation events: auto-capture, a sideways step for the second view, walk-left instructions, the checklist map and Finish. HTTPS serving was checked with a test certificate.
 
 **Not verified:** a real phone (iPhone or Android) with real sensors and the mkcert certificate, and real COLMAP. Those are the next acceptance steps.

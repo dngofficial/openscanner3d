@@ -38,7 +38,8 @@ export function isNewView(here, shots, plan) {
     || Math.abs(here.pitch - shot.pitch) >= plan.min_separation);
 }
 
-const HEIGHT_WORDS = ['low (phone at object height)', 'middle (phone above, looking down)', 'high (looking almost straight down)'];
+const HEIGHT_WORDS = ['low', 'middle', 'high'];
+const HEIGHT_HOW = ["Lower the phone to the object's height.", 'Hold the phone above the object, looking down at it.', 'Raise the phone high and look almost straight down.'];
 
 // What the user should do next. counts[ring][sector] come from the server; shots maps "ring:sector"
 // to the poses already captured there.
@@ -69,12 +70,12 @@ export function nextStep(here, counts, shots, plan) {
   if (targetSector !== sector && Math.abs(turn) >= 360 / plan.sectors / 2) {
     const degrees = Math.max(10, Math.round(Math.abs(turn) / 5) * 5);
     const side = turn > 0 ? 'left' : 'right';
-    const then = targetRing !== ring ? ` Then go ${HEIGHT_WORDS[targetRing].split(' ')[0]}.` : '';
+    const then = targetRing !== ring ? ` Then shoot from the ${HEIGHT_WORDS[targetRing]} height.` : '';
     return { kind: 'move', text: `Walk ${side} about ${degrees}° around the object, keeping it centred.${then}`, arrow: side, degrees, target };
   }
   return targetRing > ring
-    ? { kind: 'move', text: `Raise the phone and look down at the object: ${HEIGHT_WORDS[targetRing]}.`, arrow: 'up', target }
-    : { kind: 'move', text: `Lower the phone: ${HEIGHT_WORDS[targetRing]}.`, arrow: 'down', target };
+    ? { kind: 'move', text: HEIGHT_HOW[targetRing], arrow: 'up', target }
+    : { kind: 'move', text: HEIGHT_HOW[targetRing], arrow: 'down', target };
 }
 
 // Rotation speed (deg/s) samples from devicemotion over the last moments -> steady enough to shoot.

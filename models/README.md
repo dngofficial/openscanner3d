@@ -17,16 +17,16 @@ Do **not** `pip install sam2` from PyPI. That package name is a third-party repa
 SAM 2 needs PyTorch, which the web server does not, so it lives in `.venv-sam2` next to `.venv`. The scanner finds `.venv-sam2` and `models/sam2.1_hiera_tiny.pt` automatically; no config change is needed. From the repository folder in PowerShell:
 
 ```powershell
-.tools/uv/uv.exe venv --python .venv/Scripts/python.exe .venv-sam2
-.tools/uv/uv.exe pip install --python .venv-sam2/Scripts/python.exe --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match torch==2.5.1 torchvision==0.20.1
-.tools/uv/uv.exe pip install --python .venv-sam2/Scripts/python.exe "setuptools>=61" wheel
+py -3.11 -m venv .venv-sam2
+.venv-sam2/Scripts/python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple torch==2.5.1 torchvision==0.20.1
+.venv-sam2/Scripts/python.exe -m pip install "setuptools>=61" wheel
 $env:SAM2_BUILD_CUDA = '0'
-.tools/uv/uv.exe pip install --python .venv-sam2/Scripts/python.exe --no-build-isolation "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
+.venv-sam2/Scripts/python.exe -m pip install --no-build-isolation "git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4"
 Invoke-WebRequest https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt -OutFile models/sam2.1_hiera_tiny.pt
 (Get-FileHash models/sam2.1_hiera_tiny.pt -Algorithm SHA256).Hash   # must match the table above
 ```
 
-Without `.tools/uv`, use `py -3.11 -m venv .venv-sam2` and `.venv-sam2/Scripts/python.exe -m pip install ...` with the same packages and index URL.
+This needs Git for Windows (for the SAM 2 source). The checkpoint must be `sam2.1_hiera_tiny.pt`; the older `sam2_hiera_tiny.pt` has a different hash and does not match the bundled 2.1 config.
 
 **GPU (partner laptop, not yet verified):** use the PyTorch CUDA wheel index that matches the driver (for example `https://download.pytorch.org/whl/cu124`) instead of `/cpu`. `segmentation_device = "auto"` picks CUDA when it is available.
 

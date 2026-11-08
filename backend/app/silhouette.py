@@ -337,7 +337,7 @@ def y_up(mesh):
 
 def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object", masks_dir: Path | None = None,
                        target_triangles=5000, texture_size=2048, height_cm=None, segment=None,
-                       mask_cache: Path | None = None, previews: Path | None = None) -> dict:
+                       mask_cache: Path | None = None, previews: Path | None = None, stage=None) -> dict:
     """Export a photo-textured game asset and a separate vertex-coloured high-resolution mesh.
 
     segment: optional ML segmenter (see ai_masks.make_segmenter), given the rough object region and the
@@ -346,6 +346,7 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     previews: folder for small mask overlay images shown on the dashboard.
     """
     from .ai_masks import load_masks, save_masks, save_previews
+    stage = stage or (lambda text: None)
     from .game_asset import asset_frame, build_game_asset
     started = time.monotonic()
     if height_cm is not None and (not np.isfinite(height_cm) or height_cm <= 0):
@@ -380,9 +381,12 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     elif cached:
         masks, mask_info = cached
         mask_info = {**mask_info, "reused": True}
+        if previews:
+            save_previews(photos, masks, mask_info, previews)
     else:
         box = [[BOX_RADIUS * scene.orbit * np.cos(a), BOX_RADIUS * scene.orbit * np.sin(a), z]
                for a in np.linspace(0, 2 * np.pi, 24, endpoint=False) for z in (0, BOX_HEIGHT * scene.orbit)]
+        stage("Step 2 of 2: finding the object's outline in each photo.")
         masks = grabcut_masks(scene, photos, scene.world(box))
         volume, _, extent = carve(scene, masks, grid=96)
         steps = (np.arange(96) + .5) / 96
@@ -393,6 +397,7 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
         masks = grabcut_masks(scene, photos, region)
         mask_info = dict(method="GrabCut", sam2=0, grabcut=len(masks))
         if segment:
+            stage("Step 2 of 2: SAM 2 (AI) is outlining the object in each photo.")
             masks, mask_info = segment(scene, photos, images, region, masks)
         if mask_cache:
             save_masks(masks, mask_info, mask_cache)
@@ -400,6 +405,7 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
             save_previews(photos, masks, mask_info, previews)
     if mask_info.get("note"):
         warnings.append(mask_info["note"])
+    stage("Step 2 of 2: building the object's 3D shape from the outlines.")
     volume, score, extent = carve(scene, masks)
     mesh = mesh_volume(score, extent)
     coloured = colour(mesh, scene, photos, masks)
@@ -412,6 +418,7 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
         (output / name).unlink(missing_ok=True)
     game = None
     game_started = time.monotonic()
+    stage("Step 2 of 2: making the game asset (fewer triangles, photo texture).")
     try:
         game = build_game_asset(mesh, scene, photos, masks, output, stem,
                                 target_triangles, texture_size, height_cm)

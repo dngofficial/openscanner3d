@@ -17,13 +17,13 @@ OBJECT_FILES = ("object.glb", "object_hires.glb", "object.obj", "object.mtl", "o
 PREVIEWS = "mask_previews"
 
 
-def object_step(workspace: Path, images: Path, output: Path, settings: Settings, detail: str) -> dict:
+def object_step(workspace: Path, images: Path, output: Path, settings: Settings, detail: str, stage=None) -> dict:
     """Object model from an existing COLMAP run, built in a staging folder and moved into output only on success."""
     triangles, texture = DETAIL[detail]
     staging = workspace / f"object_{uuid.uuid4().hex[:8]}"
     info = reconstruct_object(workspace, images, staging, target_triangles=triangles, texture_size=texture,
                               segment=make_segmenter(settings, workspace), mask_cache=workspace / "object_masks",
-                              previews=staging / PREVIEWS)
+                              previews=staging / PREVIEWS, stage=stage)
     if not (staging / "object_hires.glb").is_file():
         raise ValueError("No object mesh was written")
     for name in OBJECT_FILES:
@@ -32,8 +32,17 @@ def object_step(workspace: Path, images: Path, output: Path, settings: Settings,
         else:
             (output / name).unlink(missing_ok=True)  # e.g. a failed game asset: never keep an older one beside it.
     if (staging / PREVIEWS).is_dir():
-        shutil.rmtree(output / PREVIEWS, ignore_errors=True)
-        os.replace(staging / PREVIEWS, output / PREVIEWS)
+        # File by file: a preview another program has open (Windows) must not fail a finished model.
+        try:
+            (output / PREVIEWS).mkdir(exist_ok=True)
+            fresh = {path.name for path in (staging / PREVIEWS).iterdir()}
+            for path in (output / PREVIEWS).iterdir():
+                if path.name not in fresh:
+                    path.unlink(missing_ok=True)
+            for name in fresh:
+                os.replace(staging / PREVIEWS / name, output / PREVIEWS / name)
+        except OSError as error:
+            info.setdefault("warnings", []).append(f"Outline previews not updated ({error.strerror or error}).")
     info["detail"] = detail
     (output / "object.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
     shutil.rmtree(staging, ignore_errors=True)
@@ -42,17 +51,18 @@ def object_step(workspace: Path, images: Path, output: Path, settings: Settings,
 
 def describe_object(info: dict) -> str:
     masks = info.get("masks") or {}
-    outline = masks.get("method", "outlines")
-    if masks.get("sam2"):
-        outline = f"SAM 2 masks in {masks['sam2']} of {masks['sam2'] + masks.get('grabcut', 0)} photos"
-    message = f"Object from {info['photos']} photos ({outline}): object_hires.glb ({info['faces']} faces)."
+    outline = f"SAM 2 outlines in {masks['sam2']} of {info['photos']} photos" if masks.get("sam2") else "basic outlines"
+    game = info.get("game_asset")
+    if game:
+        message = (f"Object ready: a {game['triangles']:,}-triangle game asset with a photo texture "
+                   f"({info.get('detail', 'standard')} detail), plus a {info['faces']:,}-triangle high-detail version. "
+                   f"Built from {info['photos']} photos using {outline}.")
+    else:
+        message = f"Object ready (high-detail version only, {info['faces']:,} triangles), built from {info['photos']} photos using {outline}."
     if info["clipped"]:
-        message += " It touches the search box edge, so part may be cut off."
-    if info.get("game_asset"):
-        message += (f" Game asset ({info.get('detail', 'standard')} detail): object.glb "
-                    f"({info['game_asset']['triangles']} triangles, photo-baked texture).")
+        message += " It touches the edge of the search area, so part of it may be cut off."
     if info.get("warnings"):
-        message += " " + " ".join(info["warnings"])
+        message += " Note: " + " ".join(info["warnings"])
     return message
 
 
@@ -67,7 +77,7 @@ def newest_run(scan: Path) -> Path | None:
     return max(runs, key=lambda run: run.stat().st_mtime) if runs else None
 
 
-def rebuild_object(scan: Path, settings: Settings, detail: str) -> dict:
+def rebuild_object(scan: Path, settings: Settings, detail: str, stage=None) -> dict:
     """Rerun only the object step (e.g. a lower triangle budget). The previous object stays if this fails."""
     if not _heavy_job.acquire(blocking=False):
         return dict(msg="Another reconstruction is running.", lvl="warn", done=False)
@@ -75,7 +85,7 @@ def rebuild_object(scan: Path, settings: Settings, detail: str) -> dict:
         workspace = newest_run(scan)
         if workspace is None:
             return dict(msg="No finished COLMAP run for this scan. Reconstruct it first.", lvl="bad", done=False)
-        info = object_step(workspace, scan / "images", scan, settings, detail)
+        info = object_step(workspace, scan / "images", scan, settings, detail, stage)
         return dict(msg=describe_object(info), lvl="warn" if info["clipped"] or info.get("warnings") else "ok",
                     done=True, model_ready=True, object=info)
     except (ValueError, OSError) as error:
@@ -137,7 +147,9 @@ def export_scene_mesh(workspace: Path) -> str | None:
     return None
 
 
-def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
+def reconstruct(images: Path, output: Path, settings: Settings, stage=None) -> dict:
+    """stage(text): optional callback told about each real step as it starts (no invented percentages)."""
+    stage = stage or (lambda text: None)
     if settings.mode != "reconstruct":
         return dict(msg="Capture-only mode: photos saved. Run reconstruction on the partner's GPU laptop.", lvl="ok", done=True, model_ready=False)
     executable = resolve_tool(settings.colmap)
@@ -153,6 +165,7 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         command = [executable, "automatic_reconstructor", "--workspace_path", str(workspace),
                    "--image_path", str(images), "--quality", settings.quality,
                    "--single_camera", "1", "--mesher", "poisson"]
+        stage("Step 1 of 2: COLMAP is finding the camera positions and the scene's 3D points. This takes several minutes.")
         code = run_logged(command, output / "colmap.log", settings.timeout_seconds)
         if code:
             return dict(msg=f"COLMAP exited with code {code}. See colmap.log.", lvl="bad", done=False)
@@ -169,10 +182,10 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
             for name in (*OBJECT_FILES, "object.json"):
                 (output / name).unlink(missing_ok=True)
             shutil.rmtree(output / PREVIEWS, ignore_errors=True)
-        message = f"Scene mesh skipped: {scene_error}" if scene_error else "Scene mesh exported (COLMAP dense + Poisson)."
+        message = f"Scene mesh skipped: {scene_error}" if scene_error else "Scene mesh built (COLMAP)."
         try:
             # Plain objects give dense stereo little to work with; their outlines still define the shape.
-            info = object_step(workspace, images, output, settings, settings.detail)
+            info = object_step(workspace, images, output, settings, settings.detail, stage)
         except (ValueError, OSError, np.linalg.LinAlgError) as error:
             if scene_error:  # Nothing new to show: leave any earlier outputs exactly as they were.
                 return dict(msg=f"{message} Object reconstruction failed: {error}.", lvl="bad", done=False)

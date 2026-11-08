@@ -1,4 +1,4 @@
-"""Per-photo quality checks; each rejection names one cause with its measured value."""
+"""Per-photo quality checks; each rejection names one cause in plain words (measured values are stored with the photo)."""
 import cv2
 
 ANALYSIS_WIDTH = 960                 # Measure sharpness at a fixed scale so thresholds mean the same for any camera.
@@ -15,13 +15,13 @@ def measurements(image) -> dict:
 def problem(values: dict) -> str | None:
     """Exposure first (judged by clipped pixels, not the mean), then sharpness, then contrast."""
     if values["white"] > MAX_CLIPPED:
-        return f"Overexposed: {values['white']:.0%} of the photo is pure white. Lower exposure or angle away from glare."
+        return "Too bright: angle the phone away from glare or bright light."
     if values["black"] > MAX_CLIPPED:
-        return f"Underexposed: {values['black']:.0%} of the photo is pure black. Add light."
+        return "Too dark: turn on more light."
     if values["brightness"] < MIN_MEAN:
-        return f"Too dark (average brightness {values['brightness']:.0f}/255). Add light."
+        return "Too dark: turn on more light."
     if values["sharpness"] < MIN_SHARPNESS:
-        return f"Blurry (sharpness {values['sharpness']:.0f}, need {MIN_SHARPNESS}). Hold still for a moment."
+        return "Blurry: hold the phone still for a second."
     if values["contrast"] < MIN_CONTRAST:
-        return f"Low contrast ({values['contrast']:.0f}, need {MIN_CONTRAST}). Add side lighting or a textured surface."
+        return "Too flat: add light from the side, or put the object on a less plain surface."
     return None
