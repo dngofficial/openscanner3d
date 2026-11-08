@@ -18,3 +18,10 @@ max_photos = 100
 # (measured on 1280x720 frames; recheck at other resolutions). Use [] for unwatermarked photos.
 # Masks steer pose estimation only; dense reconstruction still sees the full image.
 # feature_mask_regions = [[0.875, 0.785, 0.975, 0.975]]
+
+# AI object selection (SAM 2) runs as a separate process. See models/README.md for setup.
+# Leave segmentation_python empty to use the server's interpreter, or point it at a PyTorch venv.
+# segmentation_python = '.venv-sam2/Scripts/python.exe'
+# sam2_checkpoint = 'models/sam2.1_hiera_tiny.pt'
+# sam2_config = "configs/sam2.1/sam2.1_hiera_t.yaml"
+# segmentation_device = "auto"   # auto, cuda, or cpu

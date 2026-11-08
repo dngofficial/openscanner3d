@@ -21,6 +21,15 @@ The first reviewed set (77 frames of a dark power bank) covered only about a qua
 - **Fixed framing.** Turn off Camo stabilisation, auto-framing, and effects. Black wedges in frame corners mean the image is being warped, which breaks the shared-camera assumption.
 - **Watermark.** The default mask removes the free-tier Camo watermark. A watermark-free output (Camo Pro) is still preferable. If the watermark moves or the resolution changes, recheck `feature_mask_regions`.
 
+### Turning the object by hand
+
+Pick **I turn the object by hand** before pressing Start scan. Hold the phone steadily and turn or flip the object a little between shots. Frames are saved when they are sharp and different enough from the last one; there is no camera-motion check in this mode.
+
+- Turn slowly and pause briefly; motion blur is the most common rejection.
+- Change your grip between turns, so your fingers do not hide the same part of the object in every photo.
+- Use soft, even light. Lamps light a different side of the turning object each time, which can make the texture blotchy.
+- In review, click the object (top *and* sides) and shift-click your hand, then run AI selection. Add clicks on a photo after a flip if the masks lose the object.
+
 Do not open localhost on the phone for this workflow. The laptop browser receives Camo's webcam feed; the phone runs Camo Camera.
 
 ## Failure recovery

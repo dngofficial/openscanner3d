@@ -19,6 +19,12 @@ class Settings:
     # Fractional [x0, y0, x1, y1] regions excluded from feature detection. The default covers the
     # Camo free-tier watermark, measured on a 1280x720 Camo stream; use [] for unwatermarked input.
     feature_mask_regions: tuple = ((0.875, 0.785, 0.975, 0.975),)
+    # SAM 2 runs in a separate process, optionally from its own environment (e.g. a CUDA PyTorch venv).
+    # An empty segmentation_python uses the server's interpreter.
+    segmentation_python: str = ""
+    sam2_checkpoint: str = "models/sam2.1_hiera_tiny.pt"
+    sam2_config: str = "configs/sam2.1/sam2.1_hiera_t.yaml"
+    segmentation_device: str = "auto"
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -40,9 +46,13 @@ def load_settings(path: Path | None = None) -> Settings:
         value = getattr(settings, key)
         if type(value) is not int or not low <= value <= high:
             raise ValueError(f"{key} must be an integer between {low} and {high}")
-    for key in ("colmap", "blender"):
+    for key in ("colmap", "blender", "sam2_checkpoint", "sam2_config"):
         if not isinstance(getattr(settings, key), str) or not getattr(settings, key).strip():
             raise ValueError(f"{key} must be an executable name or path")
+    if not isinstance(settings.segmentation_python, str):
+        raise ValueError("segmentation_python must be an interpreter path, or empty for the server's Python")
+    if settings.segmentation_device not in {"auto", "cuda", "cpu"}:
+        raise ValueError("segmentation_device must be auto, cuda, or cpu")
     return settings
 
 

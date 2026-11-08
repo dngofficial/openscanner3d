@@ -14,14 +14,27 @@ def region_mask(width: int, height: int, regions) -> np.ndarray:
     return mask
 
 
-def write_colmap_masks(images: Path, masks: Path, regions) -> int:
-    """Write COLMAP masks (<image name>.png, zero = ignore) matching each JPEG's dimensions."""
+def write_colmap_masks(images: Path, masks: Path, regions, object_masks: Path | None = None) -> int:
+    """Write COLMAP masks (<image name>.png, zero = ignore) matching each JPEG's dimensions.
+
+    With object_masks, each image's own AI mask (same name, 255 = object) is combined with the regions,
+    so features come only from the object. A missing or mis-sized object mask is an error, never reused.
+    """
     masks.mkdir(parents=True, exist_ok=True)
     count = 0
     for image in sorted(images.glob("*.jpg")):
         with Image.open(image) as opened:
             width, height = opened.size
-        if not cv2.imwrite(str(masks / f"{image.name}.png"), region_mask(width, height, regions)):
+        mask = region_mask(width, height, regions)
+        if object_masks is not None:
+            source = object_masks / f"{image.name}.png"
+            if not source.is_file():
+                raise ValueError(f"No object mask for {image.name}")
+            with Image.open(source) as opened:
+                if opened.size != (width, height):
+                    raise ValueError(f"Object mask for {image.name} does not match the image dimensions")
+                mask[np.asarray(opened.convert("L")) <= 127] = 0
+        if not cv2.imwrite(str(masks / f"{image.name}.png"), mask):
             raise OSError(f"Could not write mask for {image.name}")
         count += 1
     if not count:

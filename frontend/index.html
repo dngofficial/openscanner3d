@@ -33,9 +33,14 @@
   .comparison > div { min-width:0; }
   #lastSaved { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; }
   #reviewGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; margin:16px 0; }
-  #reviewGrid label { display:block; padding:8px; border:1px solid #50545a; border-radius:5px; }
-  #reviewGrid img { width:100%; aspect-ratio:4/3; object-fit:contain; display:block; }
-  #reviewGrid label:has(input:not(:checked)) { opacity:.45; }
+  #reviewGrid .tile { padding:8px; border:1px solid #50545a; border-radius:5px; font-size:14px; }
+  #reviewGrid .tile.prompted { border-color:var(--have); }
+  #reviewGrid img { width:100%; aspect-ratio:4/3; object-fit:contain; display:block; cursor:crosshair; }
+  #reviewGrid .tile:has(input:not(:checked)) { opacity:.45; }
+  #reviewGrid .maskNote { display:block; color:var(--dim); }
+  #reviewGrid .maskNote.empty { color:var(--bad); }
+  #promptCanvas { display:block; width:100%; max-width:720px; background:#000; border-radius:4px; cursor:crosshair; }
+  .ai { border-top:1px solid #3a3e44; padding-top:12px; }
   button:disabled { opacity:.45; cursor:default; }
   [hidden] { display:none !important; }
   @media (max-width:860px) { .comparison { grid-template-columns:1fr; } }
@@ -56,6 +61,14 @@
   <h2>Review before processing</h2>
   <p>Uncheck setup shots, blocked views, and frames where the object moved. Excluded files stay on disk.</p>
   <p>Keep consecutive views of the same stationary object. Selecting 12 photos alone does not establish enough overlap.</p>
+  <div class="ai">
+    <h2>AI object selection · SAM 2 on this computer</h2>
+    <p>Click a photo below to open it here, then click on the object. Click every distinct part you want kept, such as its top <em>and</em> its sides; one click can select only one face. Shift-click marks something that is not the object, such as your hand or the table.</p>
+    <canvas id="promptCanvas" width="960" height="540" aria-label="Photo for AI object prompts"></canvas>
+    <p id="promptInfo">No photo chosen for prompts.</p>
+    <div class="row"><button id="clearPoints">Clear clicks on this photo</button><button id="runSegment" class="go">Run AI selection</button></div>
+    <p id="aiStatus" role="status"></p>
+  </div>
   <div class="row"><button id="selectAll">Select all</button><button id="selectNone">Clear selection</button></div>
   <div id="reviewGrid"></div>
   <p id="selectionCount" role="status"></p>
@@ -80,6 +93,12 @@
   <select id="cam" aria-label="Camera"></select>
   <div class="row"><button id="startCamera">Start camera</button><button id="refreshCameras">Refresh cameras</button></div>
   <small id="cameraStatus" role="status">Camera is stopped.</small>
+  <label>How are you capturing?
+    <select id="motion" aria-label="Capture motion">
+      <option value="orbit">Object still · I move around it</option>
+      <option value="turn">I turn the object by hand</option>
+    </select></label>
+  <small id="motionHint">Keep the object still and move the camera around it.</small>
   <strong id="scanState" role="status">Preview · not saving</strong>
   <div class="row"><button id="startScan" class="go">Start scan</button><button id="pauseScan">Pause</button></div>
   <label>Import photos <input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
@@ -99,6 +118,7 @@
 
 <script type="module">
 import { preferredCamera, cameraConstraints, frameSize, cameraError } from '/camera.mjs';
+import { promptPoint, segmentRequest } from '/selection.mjs';
 const $ = id => document.getElementById(id), v = $('v'), cam = $('cam'), banner = $('banner');
 const AZ = 12, RINGS = 3, ctx = $('dome').getContext('2d'), grab = document.createElement('canvas');
 let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
@@ -106,6 +126,8 @@ let lastOverlay = null, analyzedFrame = document.createElement("canvas"), previo
 let inFlight = false, command = null, timer = null, scanId = null, stopped = false;
 let cameraStarting = false, importReady = false, importQueue = [], importFailures = 0;
 let captureState = 'preview', reviewPhotos = [], selectedPhotos = new Set(), lastSavedName = null;
+let motion = 'orbit', prompts = new Map(), promptFrame = null, promptImage = null;
+let segmentationProblem = null, maskVersion = null, maskAreas = {};
 
 function updateControls() {
   const connected = ws?.readyState === WebSocket.OPEN;
@@ -122,24 +144,81 @@ function updateControls() {
   $('selectNone').disabled = busy || captureState !== 'review';
   $('reviewGrid').querySelectorAll('input').forEach(input => { input.disabled = busy || captureState !== 'review'; });
   $('reset').disabled = !connected || busy;
+  $('motion').disabled = !connected || busy || previousSavedCount > 0 || !['preview', 'paused'].includes(captureState);
+  $('runSegment').disabled = !connected || busy || captureState !== 'review' || !!segmentationProblem
+    || !segmentRequest(reviewPhotos, selectedPhotos, prompts);
+  $('clearPoints').disabled = busy || !promptFrame || !prompts.get(promptFrame)?.length;
   $('selectionCount').textContent = `${selectedPhotos.size} of ${reviewPhotos.length} selected · minimum 12`;
 }
 
+const photoUrl = name => `/scans/${encodeURIComponent(scanId)}/images/${encodeURIComponent(name)}`;
 function showReview(photos) {
   reviewPhotos = photos;
   selectedPhotos = new Set(photos);
   const grid = $('reviewGrid'); grid.replaceChildren();
   for (const name of photos) {
+    const tile = document.createElement('div'); tile.className = 'tile'; tile.dataset.name = name;
+    const img = document.createElement('img'); img.loading = 'lazy'; img.alt = name + ' (click to add AI prompts)';
+    img.src = photoUrl(name); img.onclick = () => choosePromptFrame(name);
     const label = document.createElement('label');
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = true;
     check.onchange = () => { if (check.checked) selectedPhotos.add(name); else selectedPhotos.delete(name); updateControls(); };
-    const img = document.createElement('img'); img.loading = 'lazy'; img.alt = name;
-    img.src = `/scans/${encodeURIComponent(scanId)}/images/${encodeURIComponent(name)}`;
-    label.append(img, check, document.createTextNode(' Include ' + name)); grid.append(label);
+    const note = document.createElement('small'); note.className = 'maskNote';
+    label.append(check, document.createTextNode(' Include ' + name)); tile.append(img, label, note); grid.append(tile);
   }
   $('reviewPanel').hidden = false;
+  showMasks();
+  if (!promptFrame && photos.length) choosePromptFrame(photos[Math.floor(photos.length / 2)]);
   updateControls();
 }
+function showMasks() {
+  for (const tile of $('reviewGrid').children) {
+    const name = tile.dataset.name, area = maskAreas[name], note = tile.querySelector('.maskNote');
+    tile.classList.toggle('prompted', !!prompts.get(name)?.length);
+    if (maskVersion && area !== undefined) {
+      tile.querySelector('img').src = `/scans/${encodeURIComponent(scanId)}/object_masks/${encodeURIComponent(name)}?v=${maskVersion}`;
+      note.textContent = area < .002 ? 'AI mask: no object found' : `AI mask: ${Math.round(area * 100)}% of photo`;
+      note.classList.toggle('empty', area < .002);
+    } else {
+      note.textContent = maskVersion ? 'No AI mask: run AI selection again' : '';
+      note.classList.toggle('empty', !!maskVersion);
+    }
+  }
+}
+function choosePromptFrame(name) {
+  promptFrame = name;
+  promptImage = new Image();
+  promptImage.onload = drawPrompts;
+  promptImage.src = photoUrl(name);
+  updateControls();
+}
+function drawPrompts() {
+  const canvas = $('promptCanvas'), c = canvas.getContext('2d');
+  if (!promptImage?.naturalWidth) return;
+  canvas.width = promptImage.naturalWidth; canvas.height = promptImage.naturalHeight;
+  c.drawImage(promptImage, 0, 0);
+  const points = prompts.get(promptFrame) || [], radius = Math.max(6, canvas.width / 120);
+  for (const [x, y, label] of points) {
+    c.beginPath(); c.arc(x * canvas.width, y * canvas.height, radius, 0, Math.PI * 2);
+    c.fillStyle = label ? '#6dff91' : '#ff6b5a'; c.fill(); c.lineWidth = radius / 3; c.strokeStyle = '#000'; c.stroke();
+  }
+  const total = [...prompts.values()].reduce((sum, list) => sum + list.length, 0);
+  $('promptInfo').textContent = `${promptFrame}: ${points.filter(p => p[2]).length} object and ${points.filter(p => !p[2]).length} not-object clicks · ${total} clicks on ${[...prompts.values()].filter(l => l.length).length} photos`;
+  showMasks(); updateControls();
+}
+$('promptCanvas').onclick = event => {
+  if (!promptFrame || captureState !== 'review' || command) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const list = prompts.get(promptFrame) || [];
+  list.push(promptPoint(event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height, event.shiftKey));
+  prompts.set(promptFrame, list.slice(-20)); drawPrompts();
+};
+$('clearPoints').onclick = () => { prompts.delete(promptFrame); drawPrompts(); };
+$('runSegment').onclick = () => {
+  const request = segmentRequest(reviewPhotos, selectedPhotos, prompts);
+  if (request) requestCommand(JSON.stringify(request));
+};
+$('motion').onchange = () => requestCommand('motion:' + $('motion').value);
 for (const [id, include] of [['selectAll', true], ['selectNone', false]]) {
   $(id).onclick = () => {
     selectedPhotos = new Set(include ? reviewPhotos : []);
@@ -257,7 +336,18 @@ function connect() {
       $('lastSaved').src = `/scans/${encodeURIComponent(scanId)}/images/${encodeURIComponent(lastSavedName)}`;
       $('lastSaved').hidden = false; $('lastSavedStatus').textContent = lastSavedName;
     }
+    if (r.motion) {
+      motion = r.motion; $('motion').value = motion;
+      $('motionHint').textContent = motion === 'turn'
+        ? 'Hold the phone, turn the object a little between shots. AI masks are required before processing.'
+        : 'Keep the object still and move the camera around it.';
+    }
+    if ('segmentation_problem' in r) {
+      segmentationProblem = r.segmentation_problem;
+      $('aiStatus').textContent = segmentationProblem ? 'AI selection unavailable: ' + segmentationProblem : '';
+    }
     if (r.mode) $('mode').textContent = r.mode === 'capture' ? 'Capture only · photos saved locally' : 'Reconstruction enabled · experimental mesh export';
+    if (r.type === 'finish' && r.object_ready) $('aiStatus').textContent = 'object.glb is the AI-isolated proposal; compare it with the unfiltered mesh.glb.';
     if (r.bins) {
       bins = r.bins; cur = r.cur; $('kfs').textContent = r.kfs; $('pts').textContent = r.pts;
       $('tracked').textContent = r.tracked_views ?? 0; $('tracking').textContent = r.tracking || 'Initializing'; $('capture_status').textContent = r.capture || '';
@@ -287,6 +377,12 @@ function connect() {
       command = null; stopped = true; showReview(r.photos);
     }
     else if (r.type === 'error') { command = null; stopped = captureState !== 'capturing'; schedule(); }
+    else if (r.type === 'motion') { command = null; }
+    else if (r.type === 'segmenting') { $('aiStatus').textContent = r.msg; }
+    else if (r.type === 'segmented') {
+      command = null; $('aiStatus').textContent = r.msg;
+      if (r.done) { maskVersion = r.version; maskAreas = r.frames || {}; showMasks(); }
+    }
     else if (r.type === 'busy') { captureState = 'processing'; stopped = true; }
     else if (r.type === 'import') { command = null; importReady = true; schedule(); }
     else if (r.type === 'reset') {
@@ -295,6 +391,8 @@ function connect() {
       lastSavedName = null; $('lastSaved').hidden = true;
       $('lastSavedStatus').textContent = 'Nothing saved. Frame the object, then press Start scan.';
       reviewPhotos = []; selectedPhotos = new Set(); $('reviewPanel').hidden = true;
+      prompts = new Map(); promptFrame = null; promptImage = null; maskVersion = null; maskAreas = {};
+      $('aiStatus').textContent = segmentationProblem ? 'AI selection unavailable: ' + segmentationProblem : '';
       analyzedFrame.width = 0; renderProcessed(); schedule();
     } else if (r.type === 'capture') {
       command = null; stopped = false; schedule();

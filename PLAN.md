@@ -28,6 +28,11 @@ This is progress within the existing plan, not a replacement roadmap. The captur
 - [x] Verify preview/pause behavior, unrelated-scene rejection, and selected-only input snapshots in automated tests.
 - [x] Verify browser import → thumbnail review → exclusion → confirmation → ZIP link using synthetic images.
 - [x] Mask the static Camo watermark during live SIFT and COLMAP feature extraction (`--mask_path`, refused if unsupported). Verified on the real reviewed set: mask placement plus fewer zero-motion matches. Its effect on COLMAP registration is not yet measured.
+- [x] Raise the import working size to 3200 px so native phone photos keep detail. Give each capture-quality rejection a single cause with its measured value; judge exposure by clipped pixels.
+- [x] Add a turned-object capture mode for a handheld phone: no scene-continuity check, steady cadence, AI masks required before confirm.
+- [x] Local SAM 2.1 tiny segmentation in a separate process, using the video predictor so clicks on one or more frames propagate. Each frame gets its own predicted mask with a visible overlay; prompts, device and checkpoint hash are recorded. Real run on the reviewed set: 77 frames in 180 s on CPU, and 14 frames through the UI in 31.5 s.
+- [x] Masks frozen with the selection and shipped in the ZIP. COLMAP features come from object pixels only. After meshing, vertices are filtered by projection into the masks (`object.glb`), keeping the unfiltered mesh for comparison. Projection is tested against synthetic cameras and OpenCV.
+- [ ] Validate object masks and isolation on a real COLMAP reconstruction (partner laptop), for both a turned-object capture and an orbit capture.
 - [ ] Recapture with a full orbit at 2–3 heights. The first reviewed set covers only about 90–120° of a dark, low-texture object.
 - [ ] Rehearse the new controls with Samsung/Camo on a stationary textured object; measure acceptance/rejection behavior and tune thresholds if necessary.
 - [ ] Complete real GPU reconstruction and independently inspect the textured result on the partner machine (Phase 0 remains open).
@@ -86,7 +91,7 @@ Timebox to the first 4–6 hours of a 48-hour event, or 2–3 hours of a 24-hour
 - [ ] Run sparse reconstruction, dense reconstruction, meshing, texturing, and GLB export manually.
 - [ ] Open the GLB in Blender and a browser viewer.
 - [ ] Record runtime and inspect missing surfaces, textures, and scene clutter.
-- [ ] Run a real local segmentation prediction and save its mask.
+- [x] Run a real local segmentation prediction and save its mask (SAM 2.1 tiny, CPU; see `models/README.md`).
 
 **Gate:** verify the full textured-mesh pipeline on the actual machine. CPU sparse reconstruction does not imply CPU dense reconstruction is supported. Check the installed build and selected backend. Do not assume every COLMAP build has the same commands or texturing capability.
 

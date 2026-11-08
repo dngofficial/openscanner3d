@@ -30,6 +30,30 @@ The default `capture` mode uses CPU OpenCV and saves frames without running reco
 
 Manual **Capture this view** bypasses the cadence and duplicate-motion thresholds, but still obeys blur/exposure and continuity checks. If the scene no longer matches, return toward the last saved view or start a new scan. Camera switching starts a new preview-only session. Hiding the page pauses active capture. Tracking overlays are collapsed and unchecked by default.
 
+## Turning the object by hand and AI object selection
+
+Choose **How are you capturing?** before saving any photos:
+
+- **Object still · I move around it** (default): the orbit workflow above, with scene-continuity checks.
+- **I turn the object by hand**: hold the phone and turn the object a little between shots. The background stays still while the object moves, so whole-scene continuity does not apply. Instead, frames are saved when they pass the quality checks, are at least 0.7 s apart, and differ enough from the last saved view (`TURN_MIN_CHANGE`). Live camera-pose tracking is skipped.
+
+In this mode, COLMAP has to ignore everything except the object, so **AI object masks are required**. Confirm refuses a turned-object selection without them. In the review panel:
+
+1. Click a thumbnail to open it in the prompt canvas. Clicking a thumbnail selects it for prompts; the checkbox controls inclusion.
+2. Click on the object. Click every distinct part you want kept, such as the top *and* the sides: on the reviewed set, one click on the top face selected only the top face. Shift-click your hand or the table to mark them as not the object. You can add clicks on several photos, for example after flipping the object.
+3. **Run AI selection** runs SAM 2.1 tiny on this computer (see [models/README.md](models/README.md)) over the selected photos. It is a separate process, so the server never loads PyTorch, and GPU memory is released when it exits. It shares the single heavy-task lock with reconstruction.
+4. Each thumbnail shows its own mask: the object tinted, everything else dimmed, and the mask's share of the photo. Untick frames where the mask is wrong, or add clicks and run it again. Frames with no object found are flagged.
+
+SAM 2's video predictor propagates your clicks through the sequence, but each frame's mask is predicted from that frame's own pixels; no mask is copied between views. A selection whose photos are not all masked is refused. AI selection works in orbit mode too and is optional there.
+
+On confirm, the masks are frozen with the selection and shipped in the reviewed ZIP (`object_masks/<image>.png` plus `segmentation.json`, which records the clicks, device, runtime and checkpoint SHA-256). For reconstruction:
+
+- **Feature extraction:** each image's COLMAP mask is its own object mask combined with the watermark mask, so camera poses come from object features only.
+- **After meshing:** every mesh vertex is projected into every masked photo using the registered, distorted COLMAP camera (`isolation.py`). A vertex is kept if at least 2 photos see it and at least 70% of those put it inside the object mask. Small fragments are then dropped.
+- **Output:** both meshes are kept. `mesh.glb` is unfiltered; `object.glb` is the AI-isolated proposal. Compare them.
+
+There is no occlusion test: background hidden behind the object in every view can survive isolation. Dense stereo still sees the whole image. The isolation code is tested against known synthetic camera geometry and OpenCV's projection, but has not yet run on a real COLMAP reconstruction.
+
 The reviewed ZIP contains only selected working JPEGs in `images/` and a `selection.json` manifest. Extract it on the partner laptop and pass that extracted `images/` folder to the batch reconstruction command. Do not transfer the entire unreviewed capture folder as the default pipeline input.
 
 ## Samsung and iPhone through Camo
@@ -55,7 +79,7 @@ Follow [PARTNER_SETUP.md](docs/PARTNER_SETUP.md). After the CPU setup works, con
 
 Camo's free tier burns a watermark into the bottom-right of every frame. Because it never moves, it produces zero-motion matches that conflict with real camera motion. By default, `feature_mask_regions` excludes that corner from live SIFT tracking. The reconstruction adapter also writes one COLMAP mask per image (`runs/<attempt>/masks/<image>.png`) and passes `--mask_path`. Reconstruction refuses to start if the installed COLMAP lacks that option, and doctor reports `mask_path_supported`. On the reviewed 77-frame Camo set, masking cut near-zero-motion SIFT matches between frames four apart from 87 to 7. That measures feature cleanup, not reconstruction success. Masks affect feature extraction only, not dense stereo. Set `feature_mask_regions = []` for photos without a watermark.
 
-Tool discovery is not proof of successful reconstruction. The current adapter produces an **experimental mesh**, not a verified textured or quad-topology model. UV texturing, Blender processing, SAM 2, and the 3D viewer remain unimplemented. Blender discovery in doctor is informational; the current export uses trimesh.
+Tool discovery is not proof of successful reconstruction. The current adapter produces an **experimental mesh** with vertex colours, not a verified textured or quad-topology model. UV texturing, Blender processing, and the 3D viewer remain unimplemented. SAM 2 masking and mask-based isolation are implemented, but have not yet been validated on a real reconstruction. Blender discovery in doctor is informational; the current export uses trimesh.
 
 ## Storage and configuration
 
@@ -63,7 +87,9 @@ Tool discovery is not proof of successful reconstruction. The current adapter pr
 - `scans/<id>/images/`: saved working JPEGs, usable for a partner-machine reconstruction test.
 - `scans/<id>/runs/<attempt>/`: separate COLMAP workspace for each reconstruction attempt.
 - `scans/<id>/selections/<selection-id>/`: immutable reviewed input copies and settings manifest.
-- `scans/<id>/reviewed-images.zip`: most recently confirmed selection for partner transfer.
+- `scans/<id>/reviewed-images.zip`: most recently confirmed selection for partner transfer (with `object_masks/` when AI selection ran).
+- `scans/<id>/object_masks/`: latest AI selection (`masks/`, `previews/`, `segmentation.json`); `segmentation.log` holds its process output.
+- `scans/<id>/object.glb` and `object.obj`: AI-isolated mesh, published only with a mesh from the same attempt.
 - `scans/<id>/colmap.log`: most recent reconstruction log.
 - `scans/<id>/mesh.glb` and `mesh.obj`: published only after successful mesh export validation.
 - `sample-data/`, `scans/`, `data/`, `.venv/`, `.tools/`, local config, keys, and weights are ignored.

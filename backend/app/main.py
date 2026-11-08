@@ -6,7 +6,8 @@ import asyncio, math, uuid, logging, time
 import json, shutil, re, zipfile
 from dataclasses import asdict
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
-from typing import Literal
+from typing import Annotated, Literal, Union
+from pydantic import TypeAdapter
 from PIL import Image, UnidentifiedImageError
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import FileResponse
 from .config import load_settings, resolve_tool
 from .reconstruction import reconstruct
+from .segmentation import run_segmentation, segmentation_tools
 from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
 from .capture_quality import continuity, exposure_problem, frame_problem
 from .masks import region_mask
@@ -24,6 +26,7 @@ SCANS = BASE / "scans"
 SETTINGS = load_settings()
 AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
 KF_DEG = 6                           # new keyframe every 6 deg of orbit
+TURN_MIN_CHANGE = 6                  # mean grey-level change between saved views when turning the object
 bf = cv2.BFMatcher(cv2.NORM_L2)
 app = FastAPI()
 
@@ -32,6 +35,28 @@ class ConfirmSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["confirm"]
     selected: list[StrictStr] = Field(min_length=12, max_length=500)
+
+
+Fraction = Annotated[float, Field(ge=0, le=1)]
+
+
+class Prompt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    frame: StrictStr
+    # (x, y) as fractions of the image; label 1 = object, 0 = not the object.
+    points: list[tuple[Fraction, Fraction, Literal[0, 1]]] = Field(min_length=1, max_length=20)
+
+
+class SegmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["segment"]
+    selected: list[StrictStr] = Field(min_length=2, max_length=500)
+    prompts: list[Prompt] = Field(min_length=1, max_length=20)
+
+
+ClientRequest = TypeAdapter(Annotated[Union[ConfirmSelection, SegmentRequest], Field(discriminator="type")])
+# Recorded with each selection; machine paths (tools, checkpoints) stay out of the shared ZIP.
+SHARED_SETTINGS = ("mode", "quality", "max_photos", "feature_mask_regions", "sam2_config")
 
 
 def match(a, b):
@@ -52,6 +77,8 @@ class Scan:
         s.overlay = None; s.previous_features = None
         s.import_next = False; s.frame_shape = None
         s.state = "preview"
+        s.motion = "orbit"           # orbit: camera moves around a still object; turn: object turned by hand
+        s.segmentation = None        # {"frames": {name: mask area}, "version": id} after AI selection
         s.accepted = False
         s.photos = []; s.last_photo = None; s.force_capture = False; s.capture_note = "Waiting for a usable frame"
         s.K = None; s.feature_mask = None; s.kfs = []; s.pts = np.zeros((0, 3)); s.ptd = np.zeros((0, 128), np.float32)
@@ -90,6 +117,8 @@ class Scan:
         if len(s.photos) >= SETTINGS.max_photos:
             s.capture_note = f"{SETTINGS.max_photos}-photo limit reached; finish this scan."
             return
+        if s.motion == "turn":
+            return s.save_turned_view(jpg, gray, now, forced)
         if s.last_photo is not None:
             if not forced and now - s.last_photo["time"] < .4:
                 s.capture_note = "Waiting between captures"
@@ -105,6 +134,25 @@ class Scan:
         (s.img / name).write_bytes(jpg)
         s.photos.append(name)
         s.last_photo = dict(xy=xy, d=d, time=now)
+        s.accepted = True
+        s.capture_note = f"Saved photo {len(s.photos)}" + (" manually" if forced else "")
+
+    def save_turned_view(s, jpg, gray, now, forced):
+        # The background stays still while the object turns, so whole-scene continuity does not apply.
+        # Save a changed view at a steady cadence; review and per-frame AI masks remove bad frames.
+        thumb = cv2.resize(gray, (160, max(1, round(160 * gray.shape[0] / gray.shape[1])))).astype(np.float32)
+        if s.last_photo is not None and not forced:
+            if now - s.last_photo["time"] < .7:
+                s.capture_note = "Waiting between captures"
+                return
+            change = float(np.mean(np.abs(thumb - s.last_photo["thumb"])))
+            if change < TURN_MIN_CHANGE:
+                s.capture_note = f"Turn the object a little more ({change:.1f}/{TURN_MIN_CHANGE} change)"
+                return
+        name = f"kf_{len(s.photos):04d}.jpg"
+        (s.img / name).write_bytes(jpg)
+        s.photos.append(name)
+        s.last_photo = dict(thumb=thumb, time=now)
         s.accepted = True
         s.capture_note = f"Saved photo {len(s.photos)}" + (" manually" if forced else "")
 
@@ -131,7 +179,7 @@ class Scan:
 
     # ---- feedback ---------------------------------------------------------
     def fb(s, msg, lvl="warn", **kw):
-        return dict(msg=msg, lvl=lvl, kfs=len(s.photos), state=s.state,
+        return dict(msg=msg, lvl=lvl, kfs=len(s.photos), state=s.state, motion=s.motion,
                     last_saved=s.photos[-1] if s.photos else None,
                     tracked_views=len(s.kfs), capture=s.capture_note,
                     tracking="Mapping" if len(s.pts) else "Initializing", pts=len(s.pts), bins=s.bins.ravel().tolist(),
@@ -236,6 +284,8 @@ class Scan:
             return s.fb(problem, "warn", **info)
         info["quality"] = "Frame passed initial quality checks"
         s.save_view(xy, d, jpg, g)
+        if s.motion == "turn":
+            return s.fb(s.capture_note, "ok", **info)  # Camera-pose tracking assumes a still object.
 
         if not s.kfs:
             s.add_kf(np.eye(3), np.zeros(3), xy, d, jpg)
@@ -285,6 +335,28 @@ class Scan:
         s.force_capture = False
         return dict(type="review", photos=list(s.photos), **s.fb("Review photos and uncheck unwanted views before confirming.", "ok"))
 
+    def set_motion(s, motion):
+        if s.photos:
+            raise ValueError("Choose how you will capture before saving photos; start a new scan to change it.")
+        s.motion = motion
+        s.last_photo = None
+        tip = ("Turn the object a little between shots and keep it in view. AI masks are required before processing."
+               if motion == "turn" else "Keep the object still and move the camera around it.")
+        return s.fb(tip, "ok")
+
+    def segment(s, selected, prompts):
+        if s.state != "review":
+            raise ValueError("Finish capture and review the photos before running AI selection.")
+        if len(set(selected)) != len(selected) or not set(selected) <= set(s.photos):
+            raise ValueError("Select distinct saved photos from this scan.")
+        if not {prompt["frame"] for prompt in prompts} <= set(selected):
+            raise ValueError("Tap the object on a photo that is still selected.")
+        selected = [name for name in s.photos if name in set(selected)]
+        result = run_segmentation(s.img, selected, prompts, s.out / "object_masks", SETTINGS)
+        if result["done"]:
+            s.segmentation = dict(frames=result["frames"], version=uuid.uuid4().hex[:8])
+        return dict(**result, version=(s.segmentation or {}).get("version"))
+
     def finish(s, selected):
         if s.state != "review":
             raise ValueError("Finish capture and review the photos before confirming.")
@@ -292,25 +364,44 @@ class Scan:
             raise ValueError("Select at least 12 distinct photos from this scan.")
         selected_set = set(selected)
         selected = [name for name in s.photos if name in selected_set]
+        if s.motion == "turn" and not s.segmentation:
+            raise ValueError("Photos of an object turned by hand need AI object masks. Tap the object and run AI selection first.")
+        if s.segmentation:
+            missing = [name for name in selected if name not in s.segmentation["frames"]]
+            if missing:
+                raise ValueError(f"{len(missing)} selected photos have no AI mask. Run AI selection again on this selection.")
         snapshot = s.out / "selections" / uuid.uuid4().hex
         images = snapshot / "images"
         images.mkdir(parents=True)
         for name in selected:
             shutil.copyfile(s.img / name, images / name)
-        manifest = dict(scan_id=s.id, selected=selected, excluded=[name for name in s.photos if name not in selected_set], settings=asdict(SETTINGS))
+        masks = None
+        if s.segmentation:
+            masks = snapshot / "object_masks"
+            masks.mkdir()
+            for name in selected:
+                shutil.copyfile(s.out / "object_masks" / "masks" / f"{name}.png", masks / f"{name}.png")
+            shutil.copyfile(s.out / "object_masks" / "segmentation.json", snapshot / "segmentation.json")
+        settings = {key: value for key, value in asdict(SETTINGS).items() if key in SHARED_SETTINGS}
+        manifest = dict(scan_id=s.id, capture_motion=s.motion, ai_object_masks=bool(masks), selected=selected,
+                        excluded=[name for name in s.photos if name not in selected_set], settings=settings)
         (snapshot / "selection.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         archive = snapshot / "reviewed-images.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
             for name in selected:
                 bundle.write(images / name, "images/" + name)
+                if masks:
+                    bundle.write(masks / f"{name}.png", f"object_masks/{name}.png")
             bundle.write(snapshot / "selection.json", "selection.json")
+            if masks:
+                bundle.write(snapshot / "segmentation.json", "segmentation.json")
         archive.replace(s.out / "reviewed-images.zip")
         with open(s.out / "sparse.ply", "w") as f:
             f.write(f"ply\nformat ascii 1.0\nelement vertex {len(s.pts)}\nproperty float x\nproperty float y\nproperty float z\nend_header\n")
             f.writelines(f"{x} {y} {z}\n" for x, y, z in s.pts)
         s.state = "processing"
         try:
-            result = reconstruct(images, s.out, SETTINGS)
+            result = reconstruct(images, s.out, SETTINGS, masks)
             s.state = "finished" if result.get("done") else "review"
             return dict(**result, state=s.state, selected_count=len(selected))
         except Exception:
@@ -326,17 +417,22 @@ def index(): return FileResponse(BASE / "frontend" / "index.html")
 def camera_module(): return FileResponse(BASE / "frontend" / "camera.mjs", media_type="text/javascript")
 
 
+@app.get("/selection.mjs")
+def selection_module(): return FileResponse(BASE / "frontend" / "selection.mjs", media_type="text/javascript")
+
+
 @app.get("/api/health")
 def health():
     return dict(status="ok", mode=SETTINGS.mode, colmap_found=bool(resolve_tool(SETTINGS.colmap)),
-                textured_export=False, segmentation=False, reconstruction_verified=False)
+                textured_export=False, segmentation=segmentation_tools(SETTINGS)[2] is None, reconstruction_verified=False)
 
 
 @app.get("/scans/{scan_id}/{filename}")
 def download(scan_id: str, filename: str):
     if not __import__("re").fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", scan_id):
         raise HTTPException(404)
-    if filename not in {"sparse.ply", "mesh.obj", "mesh.glb", "colmap.log", "reviewed-images.zip"}:
+    if filename not in {"sparse.ply", "mesh.obj", "mesh.glb", "object.obj", "object.glb", "colmap.log",
+                        "segmentation.log", "reviewed-images.zip"}:
         raise HTTPException(404)
     path = SCANS / scan_id / filename
     if not path.is_file(): raise HTTPException(404)
@@ -353,6 +449,16 @@ def saved_photo(scan_id: str, filename: str):
     return FileResponse(path, media_type="image/jpeg")
 
 
+@app.get("/scans/{scan_id}/object_masks/{filename}")
+def mask_preview(scan_id: str, filename: str):
+    if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", scan_id) or not re.fullmatch(r"kf_[0-9]{4}\.jpg", filename):
+        raise HTTPException(404)
+    path = SCANS / scan_id / "object_masks" / "previews" / filename
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg")
+
+
 @app.websocket("/ws")
 async def ws_(ws: WebSocket):
     origin = ws.headers.get("origin", "")
@@ -360,22 +466,28 @@ async def ws_(ws: WebSocket):
     if origin and origin not in (f"http://{host}", f"https://{host}"):
         await ws.close(code=1008); return
     await ws.accept(); s = Scan()
-    await ws.send_json({"type": "ready", "scan_id": s.id, "mode": SETTINGS.mode, "state": s.state,
+    await ws.send_json({"type": "ready", "scan_id": s.id, "mode": SETTINGS.mode, "state": s.state, "motion": s.motion,
+                        "segmentation_problem": segmentation_tools(SETTINGS)[2],
                         "msg": f"Scanner ready ({SETTINGS.mode} mode). Start the camera."})
     try:
         while True:
             m = await ws.receive()
             if m["type"] == "websocket.disconnect": break
-            selection = None
+            selection = request = None
             if (m.get("text") or "").startswith("{"):
                 try:
-                    selection = ConfirmSelection.model_validate_json(m["text"]).selected
-                    if s.state != "review" or len(set(selection)) != len(selection) or not set(selection) <= set(s.photos):
-                        raise ValueError("Review this scan and select distinct saved photos only.")
-                    m["text"] = "confirm"
-                except (ValidationError, ValueError) as error:
-                    await ws.send_json(dict(type="error", state=s.state, msg="Invalid review selection. Select at least 12 photos from this scan.", lvl="bad"))
+                    request = ClientRequest.validate_json(m["text"])
+                except ValidationError:
+                    await ws.send_json(dict(type="error", state=s.state, msg="Invalid request. Select at least 12 photos, and tap the object on a selected photo.", lvl="bad"))
                     continue
+                if isinstance(request, ConfirmSelection):
+                    selection = request.selected
+                    if s.state != "review" or len(set(selection)) != len(selection) or not set(selection) <= set(s.photos):
+                        await ws.send_json(dict(type="error", state=s.state, msg="Review this scan and select distinct saved photos only.", lvl="bad"))
+                        continue
+                    m["text"] = "confirm"
+                else:
+                    m["text"] = "segment"
             if m.get("bytes") is not None:
                 try:
                     processor = s.import_photo if s.import_next else s.process
@@ -401,6 +513,21 @@ async def ws_(ws: WebSocket):
                 s.force_capture = False
                 s.capture_note = "Capturing. Keep the object stationary." if s.state == "capturing" else "Paused. No camera frames will be saved."
                 await ws.send_json(dict(type="state", **s.fb(s.capture_note, "ok")))
+            elif m.get("text") in {"motion:orbit", "motion:turn"}:
+                try:
+                    await ws.send_json(dict(type="motion", **s.set_motion(m["text"].split(":")[1])))
+                except ValueError as error:
+                    await ws.send_json(dict(type="error", state=s.state, msg=str(error), lvl="warn"))
+            elif m.get("text") == "segment" and isinstance(request, SegmentRequest):
+                await ws.send_json({"type": "segmenting", "msg": "Running AI object selection on the selected photos. This can take a few minutes on a CPU.", "lvl": "ok"})
+                try:
+                    result = await asyncio.to_thread(s.segment, request.selected, [p.model_dump() for p in request.prompts])
+                except ValueError as error:
+                    result = dict(msg=str(error), lvl="bad", done=False)
+                except Exception:
+                    logging.exception("Segmentation failed")
+                    result = dict(msg="AI selection failed; check segmentation.log.", lvl="bad", done=False)
+                await ws.send_json(dict(type="segmented", state=s.state, **result))
             elif m.get("text") == "import":
                 s.import_next = True
                 await ws.send_json({"type": "import", "msg": "Importing photo…"})
@@ -413,12 +540,16 @@ async def ws_(ws: WebSocket):
                 await ws.send_json({"type": "busy", "msg": message, "lvl": "ok"})
                 try:
                     result = await asyncio.to_thread(s.finish, selection)
+                except ValueError as error:
+                    result = {"msg": str(error), "lvl": "bad", "state": s.state}
                 except Exception:
                     logging.exception("Reconstruction failed")
                     result = {"msg": "Processing failed; check the server console.", "lvl": "bad", "state": s.state}
                 files = ["reviewed-images.zip", "sparse.ply", "colmap.log"]
                 if result.get("model_ready"):
                     files.extend(["mesh.obj", "mesh.glb"])
+                if result.get("object_ready"):
+                    files.extend(["object.glb", "object.obj"])
                 result.update(type="finish", scan_id=s.id,
                               files=[f for f in files if (s.out / f).is_file()])
                 await ws.send_json(result)

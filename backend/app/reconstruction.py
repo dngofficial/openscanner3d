@@ -6,6 +6,7 @@ import threading
 import uuid
 
 from .config import Settings, resolve_tool
+from .isolation import isolate_mesh
 from .masks import write_colmap_masks
 
 _heavy_job = threading.Lock()
@@ -40,7 +41,18 @@ def run_logged(command: list[str], log_path: Path, timeout: int) -> int:
             raise
 
 
-def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
+def export_validated(mesh, folder: Path, stem: str):
+    import numpy as np
+    import trimesh
+    if not isinstance(mesh, trimesh.Trimesh) or not len(mesh.faces) or not np.isfinite(mesh.vertices).all():
+        raise ValueError(f"{stem} is not a nonempty finite triangle mesh")
+    for extension in ("obj", "glb"):
+        mesh.export(folder / f"{stem}.{extension}")
+    if not len(trimesh.load(folder / f"{stem}.glb", force="mesh").faces):
+        raise ValueError(f"Exported {stem}.glb contains no faces")
+
+
+def reconstruct(images: Path, output: Path, settings: Settings, object_masks: Path | None = None) -> dict:
     if settings.mode != "reconstruct":
         return dict(msg="Capture-only mode: photos saved. Run reconstruction on the partner's GPU laptop.", lvl="ok", done=True, model_ready=False)
     executable = resolve_tool(settings.colmap)
@@ -50,6 +62,8 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         return dict(msg="Another reconstruction is running. Try Finish again when it completes.", lvl="warn", done=False)
     try:
         help_text = colmap_help(executable)
+        if object_masks and "--mask_path" not in help_text:
+            return dict(msg="Installed COLMAP lacks --mask_path, so the AI object masks cannot be applied.", lvl="bad", done=False)
         if settings.feature_mask_regions and "--mask_path" not in help_text:
             return dict(msg="Installed COLMAP lacks --mask_path, so the configured watermark mask cannot be applied. "
                             "Set feature_mask_regions = [] only for unwatermarked photos.", lvl="bad", done=False)
@@ -59,9 +73,9 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         command = [executable, "automatic_reconstructor", "--workspace_path", str(workspace),
                    "--image_path", str(images), "--quality", settings.quality,
                    "--single_camera", "1", "--mesher", "poisson"]
-        if settings.feature_mask_regions:
+        if settings.feature_mask_regions or object_masks:
             # Masks only exclude features (pose estimation); dense stereo still sees the full image.
-            write_colmap_masks(images, workspace / "masks", settings.feature_mask_regions)
+            write_colmap_masks(images, workspace / "masks", settings.feature_mask_regions, object_masks)
             command += ["--mask_path", str(workspace / "masks")]
         code = run_logged(command, output / "colmap.log", settings.timeout_seconds)
         if code:
@@ -69,20 +83,30 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         mesh_path = workspace / "dense" / "0" / "meshed-poisson.ply"
         if not mesh_path.is_file():
             return dict(msg="No dense Poisson mesh was produced. Inspect colmap.log and the installed backend's GPU support.", lvl="bad", done=False)
-        import numpy as np
         import trimesh
         mesh = trimesh.load(mesh_path, force="mesh")
-        if not isinstance(mesh, trimesh.Trimesh) or not len(mesh.faces) or not np.isfinite(mesh.vertices).all():
-            raise ValueError("COLMAP output is not a nonempty finite triangle mesh")
-        for extension in ("obj", "glb"):
-            destination = workspace / f"mesh.{extension}"
-            mesh.export(destination)
-        reloaded = trimesh.load(workspace / "mesh.glb", force="mesh")
-        if not len(reloaded.faces):
-            raise ValueError("Exported GLB contains no faces")
-        for extension in ("obj", "glb"):
-            os.replace(workspace / f"mesh.{extension}", output / f"mesh.{extension}")
-        return dict(msg="Experimental mesh exported. Texturing and topology cleanup are not implemented yet.", lvl="ok", done=True, model_ready=True)
+        export_validated(mesh, workspace, "mesh")
+        isolation, warning = None, ""
+        if object_masks:
+            try:
+                isolated, isolation = isolate_mesh(mesh, workspace / "sparse" / "0", object_masks)
+                export_validated(isolated, workspace, "object")
+            except (ValueError, OSError) as error:
+                isolation, warning = None, f" AI isolation failed: {error}. Only the unfiltered mesh is available."
+        stems = ("mesh", "object") if isolation else ("mesh",)
+        for stem in stems:
+            for extension in ("obj", "glb"):
+                os.replace(workspace / f"{stem}.{extension}", output / f"{stem}.{extension}")
+        if not isolation:
+            # Never pair a new mesh with an isolated object from an earlier attempt.
+            for extension in ("obj", "glb"):
+                (output / f"object.{extension}").unlink(missing_ok=True)
+        message = "Experimental mesh exported (vertex colours, no UV texture yet)."
+        if isolation:
+            message += (f" AI-isolated object kept {isolation['kept_faces']} of {isolation['input_faces']} faces"
+                        f" using {isolation['masked_views']} masked views; compare it with the unfiltered mesh.")
+        return dict(msg=message + warning, lvl="warn" if warning else "ok", done=True, model_ready=True,
+                    object_ready=bool(isolation), isolation=isolation)
     except subprocess.TimeoutExpired:
         return dict(msg="Reconstruction timed out; its process tree was stopped. Photos remain available.", lvl="bad", done=False)
     finally:

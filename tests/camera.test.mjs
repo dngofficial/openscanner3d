@@ -24,3 +24,19 @@ test('camera failure messages explain permission, Camo, and secure origin issues
   assert.match(cameraError({name: 'NotAllowedError'}), /permission/);
   assert.match(cameraError({}, false), /trusted HTTPS/);
 });
+
+import { promptPoint, segmentRequest } from '../frontend/selection.mjs';
+
+test('Object taps become clamped image fractions with object/not-object labels', () => {
+  assert.deepEqual(promptPoint(240, 135, 480, 270), [0.5, 0.5, 1]);
+  assert.deepEqual(promptPoint(-5, 300, 480, 270, true), [0, 1, 0]);
+});
+
+test('Segmentation requests keep frame order and ignore deselected or negative-only prompts', () => {
+  const order = ['kf_0000.jpg', 'kf_0001.jpg', 'kf_0002.jpg'];
+  const prompts = new Map([['kf_0002.jpg', [[0.5, 0.5, 1]]], ['kf_0001.jpg', [[0.1, 0.1, 1]]]]);
+  const request = segmentRequest(order, new Set(['kf_0002.jpg', 'kf_0000.jpg']), prompts);
+  assert.deepEqual(request, {type: 'segment', selected: ['kf_0000.jpg', 'kf_0002.jpg'],
+    prompts: [{frame: 'kf_0002.jpg', points: [[0.5, 0.5, 1]]}]});
+  assert.equal(segmentRequest(order, new Set(order), new Map([['kf_0000.jpg', [[0.2, 0.2, 0]]]])), null);
+});

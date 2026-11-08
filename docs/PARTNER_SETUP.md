@@ -45,6 +45,10 @@ For photos transferred from the development laptop, stop the web server, then ru
 .venv/Scripts/python.exe -m scripts.reconstruct 'PATH_TO_EXTRACTED_REVIEWED_IMAGES/images'
 ```
 
+If the extracted ZIP contains `object_masks/` beside `images/`, the batch command uses it automatically (or pass `--object-masks PATH`). Each mask is renamed with its own photo. A missing mask stops the run instead of being borrowed from another view. A ZIP from a turned-object capture is refused without its masks. With masks, the run also writes `object.glb`, the AI-isolated proposal, next to the unfiltered `mesh.glb`. Open both in Blender and record what isolation removed or wrongly kept.
+
+To run AI selection on this laptop instead, install SAM 2 following [models/README.md](../models/README.md). For GPU inference use a CUDA PyTorch wheel; that variant has not been verified yet. Then confirm doctor's `segmentation.runtime` says `cuda`.
+
 Replace the example folder with the actual path. The command copies validated JPEGs into a new scan folder, runs the same adapter, and writes `result.json` with elapsed time and output location. Never run a separate batch process alongside a heavy web job: execution limits apply within one process.
 
 The adapter checks the installed `automatic_reconstructor -h` options, explicitly requests Poisson meshing, captures logs, limits execution time, and validates nonempty mesh export. It does not silently fall back to cloud processing or a fixture. Each attempt gets a fresh workspace so an old mesh cannot masquerade as new output.
@@ -60,7 +64,7 @@ The adapter checks the installed `automatic_reconstructor -h` options, explicitl
 - [ ] Repeat with the Samsung/Camo input set.
 - [ ] Repeat after disconnecting internet while retaining any needed local Camo connection.
 
-The current adapter exports a triangle mesh using trimesh. It does **not** provide UV texturing, clean quad topology, SAM 2 isolation, or a browser 3D viewer. These are remaining implementation gates in `PLAN.md`; a successful experimental GLB is useful evidence, not completion of the final product.
+The current adapter exports a triangle mesh with vertex colours using trimesh. It does **not** provide UV texturing, clean quad topology, or a browser 3D viewer. These are remaining implementation gates in `PLAN.md`; a successful experimental GLB is useful evidence, not completion of the final product.
 
 ## Hardware failures
 

@@ -1,5 +1,6 @@
 """Print machine capabilities without requiring CUDA or importing the web app."""
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import json
@@ -11,6 +12,7 @@ import sys
 
 from backend.app.config import ROOT, load_settings, resolve_tool
 from backend.app.reconstruction import colmap_help
+from backend.app.segmentation import segmentation_tools
 
 
 def probe(command: list[str]) -> dict:
@@ -48,16 +50,23 @@ def inspect_machine() -> dict:
         else:
             args = ["--version"] if name == "blender" else ["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"]
             tools[name] = {"path": executable, **probe([executable, *args])}
+    python, checkpoint, problem = segmentation_tools(settings)
+    segmentation = {"ok": False, "python": python, "checkpoint": str(checkpoint), "problem": problem}
+    if python and not problem:
+        segmentation["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        result = probe([python, "-c", "import torch, sam2; print(torch.__version__, 'cuda' if torch.cuda.is_available() else 'cpu')"])
+        segmentation.update(ok=result["ok"], runtime=result["output"].splitlines()[-1] if result["output"] else "")
     python_ok = sys.version_info[:2] == (3, 11)
     capture_ready = python_ok and all(value["ok"] for key, value in dependencies.items() if key != "httpx")
     return {
         "platform": platform.platform(), "python": platform.python_version(), "python_supported": python_ok,
         "mode": settings.mode, "free_disk_gib": round(shutil.disk_usage(ROOT).free / 1024**3, 1),
-        "dependencies": dependencies, "tools": tools, "capture_ready": capture_ready,
+        "dependencies": dependencies, "tools": tools, "segmentation": segmentation, "capture_ready": capture_ready,
         "reconstruction_prerequisites_found": capture_ready and tools["colmap"]["ok"] and tools["nvidia-smi"]["ok"],
         "real_reconstruction_verified": False,
         "limitations": ["Tool discovery does not prove GPU compatibility or a successful reconstruction.",
-                        "Current export is an experimental mesh; UV texturing, Blender cleanup, and SAM 2 integration are not implemented."],
+                        "Current export is an experimental mesh with vertex colours; UV texturing and Blender cleanup are not implemented.",
+                        "A working SAM 2 import does not prove mask quality; inspect the mask previews."],
     }
 
 
