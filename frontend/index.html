@@ -3,317 +3,451 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Object scanner</title>
+<title>OpenScanner 3D</title>
+<link rel="icon" href="data:,">
+<script type="importmap">{"imports": {"three": "/vendor/three/three.module.min.js"}}</script>
 <style>
-  :root { --bg:#16181b; --panel:#1f2226; --ink:#e8e3d8; --dim:#8d908f; --have:#5fb3a1; --need:#d99a3a; --bad:#d9604a; }
-  * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font:16px/1.4 "IBM Plex Sans", system-ui, sans-serif;
-         display:grid; grid-template-columns: minmax(0,1fr) 300px; gap:20px; padding:20px; }
-  @media (max-width:860px) { body { grid-template-columns:1fr; } }
-  .stage { position:relative; }
-  main { min-width:0; display:flex; flex-direction:column; gap:16px; }
-  h2 { font-size:15px; margin:0 0 8px; font-weight:600; }
-  .processed { background:var(--panel); padding:14px; border-radius:6px; }
-  #processed { display:block; width:100%; max-width:none; background:#000; border-radius:4px; }
-  .toggles { display:flex; flex-wrap:wrap; gap:12px; font-size:14px; margin:10px 0; }
-  .legend { font-size:13px; color:var(--dim); margin:8px 0 0; }
-  video { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:6px; display:block; }
-  #banner { position:absolute; left:12px; right:12px; bottom:12px; padding:12px 16px; border-radius:6px; font-weight:600;
-            background:rgba(22,24,27,.88); border-left:6px solid var(--dim); }
-  #banner.ok { border-color:var(--have); } #banner.warn { border-color:var(--need); } #banner.bad { border-color:var(--bad); }
-  aside { background:var(--panel); border-radius:6px; padding:16px; display:flex; flex-direction:column; gap:14px; align-self:start; }
-  select, button { font:inherit; color:var(--ink); background:var(--bg); border:1px solid #3a3e44; border-radius:4px; padding:9px 10px; }
-  button { cursor:pointer; } button.go { background:var(--have); color:#0e1a17; border-color:var(--have); font-weight:600; }
-  button:focus-visible, select:focus-visible { outline:2px solid var(--need); outline-offset:2px; }
-  canvas { width:100%; max-width:240px; align-self:center; }
-  dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; color:var(--dim); } dd { margin:0; color:var(--ink); text-align:right; }
-  .row { display:flex; gap:8px; } .row button { flex:1; }
-  small { color:var(--dim); }
+  :root { --bg:#121417; --panel:#1b1e22; --raised:#23272c; --line:#33383f; --ink:#ece8df; --dim:#b4b8bc;
+          --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; --info:#6ea8fe; --radius:10px; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:16px 24px;
+           border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+  h1 { font-size:20px; margin:0; letter-spacing:.01em; }
+  .brand span { display:block; font-size:12px; color:var(--dim); } h2 { font-size:16px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; color:var(--dim); font-weight:600; }
+  .pills { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { font-size:13px; font-weight:600; padding:4px 10px; border-radius:999px; background:var(--raised); border:1px solid var(--line); }
+  .pill::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--dim); vertical-align:1px; }
+  .pill.ok::before { background:var(--ok); } .pill.warn::before { background:var(--warn); } .pill.bad::before { background:var(--bad); }
+  main { display:grid; grid-template-columns:minmax(280px, 360px) minmax(0, 1fr); gap:20px; padding:20px 24px; max-width:1400px; margin:0 auto; }
+  main > * { min-width:0; }  /* grid items may shrink below their content width */
+  @media (max-width:900px) { main { grid-template-columns:1fr; padding:16px; } #scans { max-height:55vh; overflow-y:auto; } #detail { order:-1; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; scroll-margin-top:96px; }
+  .stack { display:grid; gap:20px; align-content:start; }
+  button, a.button { font:inherit; font-weight:600; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px;
+                     padding:8px 12px; text-decoration:none; cursor:pointer; display:inline-flex; align-items:center; gap:6px; min-height:36px; }
+  button.go, a.button.go { background:var(--ok); border-color:var(--ok); color:#06201b; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; }
+  button[aria-pressed="true"] { background:#2f4a44; border-color:var(--ok); }
+  button:disabled { opacity:.5; cursor:default; }
+  button:focus-visible, a.button:focus-visible, .scan:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
+  /* connect */
+  .connect { display:grid; gap:14px; }
+  #qr svg { display:block; width:min(220px, 100%); height:auto; margin:0 auto; border-radius:8px; }
+  .connect.compact #qr { display:none; }
+  #qr.untrusted svg { opacity:.3; }
+  #qrNote { text-align:center; font-weight:600; color:var(--warn); margin:6px 0 0; }
+  .problem { color:var(--warn); margin:4px 0; }
+  code { background:#0e1013; padding:2px 6px; border-radius:4px; word-break:break-all; font-size:12px; }
+  #problems .steps { margin:6px 0; padding-left:22px; display:grid; gap:4px; }
+  .problem code, .steps code { display:block; margin:6px 0; padding:6px 8px; white-space:nowrap; overflow-x:auto; word-break:normal; color:var(--ink); }
+  .meta { color:var(--dim); font-size:13px; }
+  p.meta, .rebuild .meta { font-size:14px; }
+  /* scan list */
+  #scans { display:grid; gap:8px; }
+  .scan { display:grid; grid-template-columns:64px 1fr; gap:12px; align-items:center; padding:10px; border-radius:8px; border:1px solid transparent;
+          background:var(--raised); cursor:pointer; text-align:left; width:100%; color:var(--ink); font:inherit; }
+  .scan[aria-current="true"] { border-color:var(--ok); }
+  .scan canvas { width:64px; height:64px; }
+  .scan b { display:block; font-size:14px; }
+  .badge { display:inline-block; font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; margin-top:4px; }
+  .badge.capturing { background:#3d3220; color:var(--warn); } .badge.ready { background:#1f3a35; color:var(--ok); }
+  .badge.running { background:#1f2c3f; color:var(--info); } .badge.failed { background:#3d2220; color:var(--bad); }
+  .badge.saved, .badge.idle { background:#2a2d31; color:var(--ink); }
+  .empty { color:var(--dim); text-align:center; padding:24px 8px; }
+  /* detail */
+  .scanpick { display:none; flex-basis:100%; min-width:0; max-width:100%; align-items:center; gap:8px; }
+  @media (max-width:900px) { .scanpick { display:flex; } .scanpick select { flex:1 1 0; width:0; min-width:0; } }
+  .detail-head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+  #viewerBox { position:relative; margin-top:12px; border-radius:var(--radius); overflow:hidden; background:#0e1013; border:1px solid var(--line); }
+  #viewer canvas { display:block; }
+  #viewerEmpty { padding:48px 16px; text-align:center; color:var(--dim); }
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+  select { font:inherit; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px; padding:7px 10px; min-height:36px; max-width:100%; min-width:0; }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; margin-top:12px; }
+  .fact { background:var(--raised); border-radius:8px; padding:10px; } .fact b { display:block; font-size:18px; }
+  .downloads { display:flex; flex-wrap:wrap; gap:8px; }
+  .thumbs { display:grid; grid-template-columns:repeat(6, 1fr); gap:6px; }  /* 6, 9 or 12 columns: 36 photos fill whole rows */
+  @media (min-width:1100px) { .thumbs { grid-template-columns:repeat(9, 1fr); } }
+  @media (min-width:1300px) { .thumbs { grid-template-columns:repeat(12, 1fr); } }
+  .gallery > summary { cursor:pointer; font-size:14px; font-weight:600; color:var(--dim); padding:10px 0; margin-top:8px; }
+  .checkhint { color:var(--ink); font-size:14px; margin:4px 0 8px; }
+  .rebuild { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; padding:10px; background:var(--raised); border-radius:8px; }
+  .rebuild .meta { flex:1 1 100%; margin:0; }
+  .rebuild select { flex:1 1 200px; }
+  .thumbs img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; background:#000; display:block; }
+  .thumbs.masks img { aspect-ratio:auto; object-fit:contain; }
+  @media (min-width:700px) { .thumbs.masks { grid-template-columns:repeat(9, 1fr); } }
+  @media (min-width:1300px) { .thumbs.masks { grid-template-columns:repeat(12, 1fr); } }
+  .thumbs a { display:block; border-radius:4px; }
+  .thumbs a:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
+  .more { margin-top:8px; } .more summary { cursor:pointer; color:var(--dim); font-weight:600; padding:6px 0; }
+  .hint { color:var(--dim); font-size:13px; flex-basis:100%; }
+  .spinner { width:14px; height:14px; border:2px solid var(--info); border-right-color:transparent; border-radius:50%; display:inline-block; }
+  @media (prefers-reduced-motion:no-preference) { .spinner { animation:spin 1s linear infinite; } }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #status { margin-top:10px; }
+  /* Touch-sized controls on small or touch screens (after the base rules so it wins). */
+  @media (max-width:600px), (pointer:coarse) { button, a.button, select, .more summary, .gallery > summary { min-height:44px; } }
+  [hidden] { display:none !important; }
 </style>
 </head>
 <body>
-<main>
-<h2>Live camera</h2>
-<div class="stage">
-  <video id="v" autoplay playsinline muted></video>
-  <div id="banner">Connecting to scanner…</div>
-</div>
-<section class="processed">
-  <h2>Processed camera · latest analyzed frame</h2>
-  <canvas id="processed" width="960" height="540" aria-label="Camera frame with feature bounding box, detected points and feature motion"></canvas>
-  <div class="toggles">
-    <label><input id="showBox" type="checkbox" checked> Feature box</label>
-    <label><input id="showPoints" type="checkbox" checked> Features</label>
-    <label><input id="showTrails" type="checkbox" checked> Motion trails</label>
+<header>
+  <div class="brand"><h1>OpenScanner 3D</h1><span>Local 3D object scanner</span></div>
+  <div class="pills">
+    <span class="pill" id="pillMode">Mode</span>
+    <span class="pill" id="pillPhone">Phone</span>
   </div>
-  <p class="legend">Amber box: central 90% of detected features. Cyan dots: image features. Amber lines: candidate matches from the previous frame. Green dots: accepted pose inliers.</p>
-  <p class="legend">The box shows feature spread, not an identified object. Background features may be included.</p>
-</section>
+</header>
+<main>
+  <div class="stack">
+    <section aria-labelledby="connectTitle">
+      <h2 id="connectTitle">Connect a phone</h2>
+      <div class="connect" id="connect">
+        <div><div id="qr" role="img" aria-label="QR code with the phone link"></div><p id="qrNote" hidden>Not trusted yet: fix the problem below first.</p></div>
+        <div>
+          <p id="connectHelp" class="meta">Loading…</p>
+          <div id="problems"></div>
+          <p id="urls"></p>
+          <button id="toggleQr" hidden>Show QR code</button>
+        </div>
+      </div>
+    </section>
+    <section aria-labelledby="scansTitle">
+      <h2 id="scansTitle">Scans</h2>
+      <div id="scans"><p class="empty">No scans yet. Scan the QR code with your phone and tap Start scanning.</p></div>
+    </section>
+  </div>
+  <section id="detail">
+    <div id="detailEmpty" class="empty">Select a scan to see its photos, status and 3D model.</div>
+    <div id="detailBody" hidden>
+      <div class="detail-head">
+        <div><h2 id="detailTitle" style="margin:0"></h2><span id="detailBadge" class="badge"></span></div>
+        <label class="scanpick"><span class="meta">Scan</span> <select id="scanPick" aria-label="Choose a scan"></select></label>
+        <div id="actions" class="actions"></div>
+      </div>
+      <p id="status" class="meta" role="status" aria-live="polite"></p>
+      <div id="viewerBox">
+        <div id="viewer"></div>
+        <div id="viewerEmpty">No 3D model yet.</div>
+      </div>
+      <div class="toolbar" id="viewerTools" hidden>
+        <label class="meta" for="model">Model</label>
+        <select id="model"></select>
+        <button id="wire" aria-pressed="false">Wireframe</button>
+        <button id="spin" aria-pressed="false">Turntable</button>
+        <button id="resetView">Reset view</button>
+        <span class="meta" id="modelStats"></span>
+        <span class="hint" id="viewerHint">Drag to rotate · scroll to zoom · right-drag to pan</span>
+      </div>
+      <div class="rebuild" id="rebuild" hidden>
+        <label for="detailLevel"><b>Game asset detail</b></label>
+        <select id="detailLevel"></select>
+        <button id="rebuildGo">Rebuild object</button>
+        <p class="meta" id="rebuildNote">Rebuilds only the object, reusing this scan's camera positions and outlines (about a minute). The current files stay if it fails.</p>
+      </div>
+      <div class="facts" id="facts"></div>
+      <div id="masksBox" hidden>
+        <h3>Check the green outlines</h3>
+        <p class="checkhint">If the green misses part of the object in some photos, the model will miss it too: rescan and tap the object on the first photo.</p>
+        <p class="meta" id="masksText"></p>
+        <details class="gallery" id="maskGallery" open><summary id="maskSummary">Outlines</summary><div class="thumbs masks" id="maskThumbs"></div></details>
+      </div>
+      <h3>Downloads</h3>
+      <div class="downloads" id="downloads"></div>
+      <details class="more" id="moreBox" hidden><summary>More formats</summary><div class="downloads" id="moreDownloads"></div></details>
+      <details class="gallery"><summary id="photoSummary">Photos</summary><div class="thumbs" id="thumbs"></div></details>
+    </div>
+  </section>
 </main>
-<aside>
-  <small id="mode">Connecting…</small>
-  <small>iPhone or Samsung via Camo: open Camo Studio on this laptop, connect your phone, then select Camo below.</small>
-  <select id="cam" aria-label="Camera"></select>
-  <div class="row"><button id="startCamera">Start camera</button><button id="refreshCameras">Refresh cameras</button></div>
-  <small id="cameraStatus" role="status">Camera is stopped.</small>
-  <label>Import photos <input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
-  <small id="importStatus" role="status"></small>
-  <canvas id="dome" width="240" height="240" aria-label="Coverage map"></canvas>
-  <small>Rings run from low angle (outer) to overhead (centre). Teal = captured, amber = still needed. The dot is you.</small>
-  <dl>
-    <dt>Saved photos</dt><dd id="kfs">0</dd><dt>Tracked views</dt><dd id="tracked">0</dd><dt>Live tracking</dt><dd id="tracking">Initializing</dd><dt>Map points</dt><dd id="pts">0</dd>
-    <dt>Features (need 40)</dt><dd id="feats">–</dd><dt>Brightness / 255</dt><dd id="brightness">–</dd><dt>Sharpness</dt><dd id="blur">–</dd><dt>Object in frame</dt><dd id="size">–</dd>
-  </dl>
-  <small id="capture_status">Move slowly around the object to save different views.</small>
-  <small id="quality"></small>
-  <button id="capture">Capture this view</button>
-  <div id="downloads"></div>
-  <div class="row"><button id="reset">Start over</button><button id="finish" class="go">Finish</button></div>
-</aside>
-
 <script type="module">
-import { preferredCamera, cameraConstraints, frameSize, cameraError } from '/camera.mjs';
-const $ = id => document.getElementById(id), v = $('v'), cam = $('cam'), banner = $('banner');
-const AZ = 12, RINGS = 3, ctx = $('dome').getContext('2d'), grab = document.createElement('canvas');
-let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
-let lastOverlay = null, analyzedFrame = document.createElement("canvas"), previousSavedCount = 0, savedFlash = false;
-let inFlight = false, command = null, timer = null, scanId = null, stopped = false;
-let cameraStarting = false, importReady = false, importQueue = [], importFailures = 0;
-
-async function listCams() {
-  if (!navigator.mediaDevices?.enumerateDevices) return [];
-  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(x => x.kind === 'videoinput');
-  const previous = cam.value;
-  cam.replaceChildren();
-  devices.forEach((d, i) => cam.add(new Option(d.label || 'Camera ' + (i + 1), d.deviceId)));
-  if (devices.some(d => d.deviceId === previous)) cam.value = previous;
-  return devices;
-}
-async function start(id) {
-  stream?.getTracks().forEach(t => t.stop());
-  stream = null;
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable');
-  try {
-    stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(id));
-  } catch (error) {
-    if (error.name !== 'OverconstrainedError') throw error;
-    stream = await navigator.mediaDevices.getUserMedia({audio: false, video: id ? {deviceId: {exact: id}} : true});
-  }
-  v.srcObject = stream;
-  await v.play();
-  await listCams();
-  const track = stream.getVideoTracks()[0];
-  if (track.getSettings().deviceId) cam.value = track.getSettings().deviceId;
-  $('cameraStatus').textContent = track.label + ' · ' + v.videoWidth + ' × ' + v.videoHeight;
-  track.addEventListener('ended', () => {
-    stream = null;
-    $('cameraStatus').textContent = 'Camera disconnected. Reconnect Camo, then press Start camera.';
-  });
-}
-async function startCamera(manualId) {
-  if (cameraStarting || inFlight || command || importQueue.length) {
-    $('cameraStatus').textContent = 'Wait for the current frame or operation, then try again.';
-    return;
-  }
-  cameraStarting = true;
-  clearTimeout(timer);
-  try {
-    const devices = await listCams();
-    const chosen = manualId || preferredCamera(devices)?.deviceId;
-    await start(chosen);
-    // Device labels can be hidden until permission has been granted.
-    if (!manualId && !chosen) {
-      const camo = preferredCamera(await listCams());
-      if (camo && stream.getVideoTracks()[0].getSettings().deviceId !== camo.deviceId) await start(camo.deviceId);
-    }
-    if (previousSavedCount > 0) {
-      requestCommand('reset'); // Keep different camera intrinsics in separate scans.
-      $('cameraStatus').textContent += ' · New scan started; previous photos remain saved.';
-    } else { stopped = false; schedule(); }
-  } catch (error) {
-    stream?.getTracks().forEach(track => track.stop()); stream = null;
-    $('cameraStatus').textContent = cameraError(error, window.isSecureContext);
-  } finally { cameraStarting = false; }
-}
-cam.onchange = () => startCamera(cam.value);
-$('startCamera').onclick = () => startCamera();
-$('refreshCameras').onclick = () => listCams().catch(error => { $('cameraStatus').textContent = error.message; });
-navigator.mediaDevices?.addEventListener?.('devicechange', () => listCams().catch(() => {}));
-window.addEventListener('pagehide', () => { stream?.getTracks().forEach(track => track.stop()); ws?.close(); });
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTimeout(timer);
-  else if (!inFlight) schedule();
-});
-$('photos').onchange = event => {
-  if (inFlight || command || importQueue.length) { $('importStatus').textContent = 'Wait for the current operation, then select photos again.'; return; }
-  const files = [...event.target.files];
-  if (!files.length) return;
-  if (files.length > 100 || files.some(file => file.size > 25 * 1024 * 1024)) {
-    $('importStatus').textContent = 'Choose at most 100 photos, each under 25 MB.'; return;
-  }
-  stream?.getTracks().forEach(track => track.stop()); stream = null;
-  importQueue = files; importFailures = 0; stopped = false;
-  $('importStatus').textContent = 'Importing photos. Keep this page open.';
-  event.target.value = ''; schedule();
+import { drawCoverage } from '/guidance.mjs';
+const $ = id => document.getElementById(id);
+let details = null;
+let plan = null, mode = 'capture', selected = null, viewer = null, loadedModel = null, qrForced = false, phoneConnected = false;
+let listKey = '', actionsKey = '', actionError = '', offline = false;
+const LABELS = {
+  'object.glb': 'Game asset (GLB)', 'object_hires.glb': 'Object, high detail (GLB)', 'object.obj': 'Object (OBJ)',
+  'object.mtl': 'Object material (MTL, goes with OBJ)', 'object_albedo.png': 'Object texture (PNG)', 'mesh.glb': 'Whole scene (GLB)',
+  'mesh.obj': 'Whole scene (OBJ)', 'scan.zip': 'Photos + angles (ZIP)', 'colmap.log': 'Reconstruction log',
 };
+const PRIMARY = ['object.glb', 'scan.zip'];
+const MODELS = [['object.glb', 'Game asset'], ['object_hires.glb', 'High detail'], ['mesh.glb', 'Whole scene']];
 
-function requestCommand(value) {
-  if (value !== 'import' && (importQueue.length || importReady)) return;
-  if (!ws || ws.readyState !== WebSocket.OPEN || command) return;
-  clearTimeout(timer);
-  command = value;
-  if (!inFlight) dispatchCommand();
+async function json(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
 }
-function dispatchCommand() {
-  if (!command || inFlight || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(command);
+function pill(id, text, level) { const el = $(id); el.textContent = text; el.className = `pill ${level}`; }
+
+function state(scan) {
+  const status = scan.status?.state;
+  if (!scan.finished) return phoneConnected && scan.photos.length ? ['capturing', 'Capturing on phone'] : ['idle', 'Not finished'];
+  if (status === 'running') return ['running', 'Reconstructing'];
+  if (status === 'ready') return ['ready', 'Model ready'];
+  if (status === 'failed' || status === 'interrupted') return ['failed', status === 'failed' ? 'Failed' : 'Interrupted'];
+  return mode === 'reconstruct' ? ['saved', 'Ready to reconstruct'] : ['saved', 'Photos saved'];
 }
-function schedule() {
-  clearTimeout(timer);
-  if (!stopped && !command && !document.hidden) timer = setTimeout(send, 150);
+
+async function loadConnect() {
+  try {
+    const info = await json('/api/connect');
+    mode = info.mode;
+    pill('pillMode', mode === 'reconstruct' ? 'Ready to build 3D models' : 'Capture only (build models on the GPU laptop)', mode === 'reconstruct' ? 'ok' : '');
+    const seen = info.phone_seen_seconds;
+    const connected = phoneConnected = seen !== null && seen !== undefined && seen < 30;
+    pill('pillPhone', connected ? `Phone connected · ${seen}s ago` : info.lan ? 'No phone yet' : 'Phone access off', connected ? 'ok' : 'warn');
+    $('qr').innerHTML = info.qr_svg || '';
+    const usable = info.lan && info.urls.length && info.qr_svg;
+    $('connect').classList.toggle('compact', !usable || (connected && !qrForced));
+    $('toggleQr').hidden = !(usable && connected);
+    $('toggleQr').textContent = qrForced ? 'Hide QR code' : 'Show QR code';
+    $('connectHelp').textContent = !usable ? 'The phone cannot connect yet:'
+      : connected ? 'A phone is connected. Scan the QR code again on another phone if needed.'
+      : 'Scan this QR code with the phone camera (same Wi-Fi), or open the link below in Safari or Chrome.';
+    const untrusted = !!(usable && info.problems.length);
+    $('connectHelp').hidden = untrusted && !connected;  // The QR caption already says to fix the problem first.
+    $('qr').classList.toggle('untrusted', untrusted); $('qrNote').hidden = !untrusted || $('connect').classList.contains('compact');
+    $('problems').replaceChildren(...info.problems.map(text => {
+      // "…. Stop the scanner, run <command>, then start it again. (details)" -> sentence, numbered steps, muted details.
+      const box = document.createElement('div');
+      const match = text.match(/^(.*?)\s*Stop the scanner, run (\S+ -m scripts\.make_cert), then start it again\.\s*(.*)$/);
+      if (!match) { box.append(Object.assign(document.createElement('p'), { className: 'problem', textContent: text })); return box; }
+      const steps = document.createElement('ol'); steps.className = 'steps';
+      for (const step of ['Stop the scanner (Ctrl+C in its window).', 'Run:', 'Start the scanner again and reload this page.'])
+        steps.append(Object.assign(document.createElement('li'), { textContent: step }));
+      steps.children[1].append(Object.assign(document.createElement('code'), { textContent: match[2] }));
+      box.append(Object.assign(document.createElement('p'), { className: 'problem', textContent: match[1] }), steps);
+      if (match[3]) box.append(Object.assign(document.createElement('p'), { className: 'meta', textContent: match[3] }));
+      return box;
+    }));
+    $('urls').replaceChildren(...(usable ? info.urls.slice(0, 1) : []).map(url => Object.assign(document.createElement('code'), { textContent: url })));
+  } catch (error) {
+    // 403 = opened from another device; anything else = the scanner did not answer.
+    $('connectHelp').textContent = /\(403\)|Forbidden/.test(error.message)
+      ? 'The phone link is only shown on the laptop itself (https://localhost:8443).'
+      : 'The scanner is not responding. Check that it is still running, then reload this page.';
+    $('qr').innerHTML = ''; $('urls').replaceChildren(); $('problems').replaceChildren(); $('qrNote').hidden = true;
+  }
 }
-function connect() {
-  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-  ws.onclose = () => { clearTimeout(timer); banner.textContent = 'Scanner disconnected. Reload the page to reconnect.'; banner.className = 'bad'; };
-  ws.onerror = () => { banner.textContent = 'Could not connect to the scanner.'; banner.className = 'bad'; };
-  ws.onmessage = e => {
-    const r = JSON.parse(e.data);
-    banner.textContent = r.msg; banner.className = r.lvl || '';
-    if (r.scan_id) scanId = r.scan_id;
-    if (r.mode) $('mode').textContent = r.mode === 'capture' ? 'Capture only · photos saved locally' : 'Reconstruction enabled · experimental mesh export';
-    if (r.bins) {
-      bins = r.bins; cur = r.cur; $('kfs').textContent = r.kfs; $('pts').textContent = r.pts;
-      $('tracked').textContent = r.tracked_views ?? 0; $('tracking').textContent = r.tracking || 'Initializing'; $('capture_status').textContent = r.capture || '';
-      $('feats').textContent = r.feats ?? '–'; $('brightness').textContent = r.brightness ?? '–'; $('quality').textContent = r.quality || '';
-      $('blur').textContent = r.blur ?? '–'; $('size').textContent = r.size ? Math.round(r.size * 100) + '%' : '–'; draw();
+$('toggleQr').onclick = () => { qrForced = !qrForced; loadConnect(); };
+
+function listItem(scan) {
+  const [kind, label] = state(scan);
+  const item = document.createElement('button');
+  item.className = 'scan'; item.setAttribute('aria-current', String(scan.id === selected));
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
+  drawCoverage(canvas.getContext('2d'), 128, plan, scan.coverage.counts);
+  const text = document.createElement('div');
+  const created = scan.created ? new Date(scan.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : scan.id;
+  text.innerHTML = `<b></b><span class="meta"></span><br><span class="badge ${kind}"></span>`;
+  text.querySelector('b').textContent = created;
+  text.querySelector('.meta').textContent = `${scan.photos.length} photos · ${Math.round(100 * scan.coverage.have / scan.coverage.wanted)}% of angles`;
+  text.querySelector('.badge').textContent = label;
+  item.append(canvas, text);
+  item.onclick = () => { selected = scan.id; actionError = ''; listKey = ''; refresh(); };
+  return item;
+}
+
+async function showModel(scanId, file, version = '') {
+  const key = `${scanId}/${file}/${version}`;
+  if (loadedModel === key) return;
+  loadedModel = key;
+  $('modelStats').textContent = 'Loading…';
+  try {
+    if (!viewer) {
+      const { createViewer } = await import('/viewer.mjs');
+      viewer = createViewer($('viewer'));
     }
-    if (r.type === 'frame') {
-      // grab still contains the exact submitted frame; draw before sending another.
-      analyzedFrame.width = grab.width; analyzedFrame.height = grab.height;
-      analyzedFrame.getContext('2d').drawImage(grab, 0, 0);
-      lastOverlay = r.overlay || null;
-      savedFlash = r.kfs > previousSavedCount; previousSavedCount = r.kfs ?? previousSavedCount;
-      renderProcessed();
-      inFlight = false;
-      if (importReady) {
-        if (!r.accepted) importFailures++;
-        importReady = false;
-        $('importStatus').textContent = importQueue.length ? importQueue.length + ' photos remaining.' : 'Import finished. ' + importFailures + ' failed. Press Finish when ready.';
-      }
-      if (command) dispatchCommand(); else schedule();
-    } else if (r.type === 'ready') schedule();
-    else if (r.type === 'import') { command = null; importReady = true; schedule(); }
-    else if (r.type === 'reset') {
-      command = null; stopped = false; $('downloads').replaceChildren();
-      lastOverlay = null; previousSavedCount = 0; savedFlash = false;
-      analyzedFrame.width = 0; renderProcessed(); schedule();
-    } else if (r.type === 'capture') {
-      command = null; stopped = false; schedule();
-    } else if (r.type === 'finish') {
-      command = null; stopped = !!r.done;
-      const box = $('downloads'); box.replaceChildren();
-      for (const file of r.files || []) {
-        const a = document.createElement('a'); a.href = '/scans/' + encodeURIComponent(scanId) + '/' + encodeURIComponent(file);
-        a.textContent = 'Download ' + file; a.style.display = 'block'; a.style.color = '#5fb3a1'; box.append(a);
-      }
-      if (!stopped) schedule();
+    const info = await viewer.load(`/scans/${scanId}/${file}?v=${Date.now()}`);
+    $('modelStats').textContent = `${info.triangles.toLocaleString()} triangles · ${info.textured ? 'UV texture' : info.vertexColours ? 'vertex colours' : 'no colour'}`;
+    viewer.setWireframe($('wire').getAttribute('aria-pressed') === 'true');
+  } catch (error) {
+    $('modelStats').textContent = `Could not display ${file}: ${error.message}`;
+    loadedModel = null;
+  }
+}
+$('model').onchange = () => showModel(selected, $('model').value, $('model').dataset.version);
+for (const [id, apply] of [['wire', on => viewer?.setWireframe(on)], ['spin', on => viewer?.setTurntable(on)]]) {
+  $(id).onclick = () => { const on = $(id).getAttribute('aria-pressed') !== 'true'; $(id).setAttribute('aria-pressed', String(on)); apply(on); };
+}
+$('resetView').onclick = () => viewer?.reset();
+
+function renderDetail(scan) {
+  $('detailEmpty').hidden = !!scan; $('detailBody').hidden = !scan;
+  if (!scan) return;
+  const [kind, label] = state(scan);
+  $('detailTitle').textContent = scan.created ? new Date(scan.created).toLocaleString() : scan.id;
+  $('detailBadge').className = `badge ${kind}`; $('detailBadge').textContent = label;
+  const status = scan.status;
+  const message = actionError || status?.message || (scan.finished ? ''
+    : scan.photos.length ? 'Not finished on the phone yet. This page updates as photos arrive.' : 'No photos yet.');
+  const statusKey = `${status?.state}|${message}`;
+  if ($('status').dataset.key !== statusKey) {  // Only touch the live region when the text changes.
+    $('status').dataset.key = statusKey;
+    $('status').innerHTML = status?.state === 'running' && !actionError ? '<span class="spinner" aria-hidden="true"></span> ' : '';
+    $('status').append(message);
+    $('status').style.color = actionError ? 'var(--bad)' : '';
+  }
+  const ready = status?.state === 'ready' && scan.files.includes('object.glb');
+  const actionKey = `${scan.id}|${scan.finished}|${status?.state}|${mode}|${ready}`;
+  if (actionKey !== actionsKey) {  // Rebuilding the buttons every poll would steal keyboard focus.
+    actionsKey = actionKey;
+    const actions = [];
+    if (ready) actions.push(Object.assign(document.createElement('a'), {
+      className: 'button go', href: `/scans/${scan.id}/object.glb`, download: '', textContent: 'Download game asset (GLB)' }));
+    if (scan.finished && mode === 'reconstruct' && status?.state !== 'running') {
+      const go = Object.assign(document.createElement('button'), {
+        className: ready ? '' : 'go', textContent: status?.state === 'ready' ? 'Reconstruct again' : status ? 'Retry reconstruction' : 'Reconstruct' });
+      go.onclick = async () => {
+        go.disabled = true; actionError = '';
+        try { await json(`/api/scans/${scan.id}/reconstruct`, { method: 'POST' }); }
+        catch (error) { actionError = `Could not start: ${error.message}`; go.disabled = false; }
+        refresh();
+      };
+      actions.push(go);
     }
+    $('actions').replaceChildren(...actions);
+  }
+  const models = MODELS.filter(([file]) => scan.files.includes(file));
+  $('viewerTools').hidden = !models.length; $('viewerEmpty').hidden = !!models.length; $('viewer').hidden = !models.length;
+  if (models.length) {
+    const current = $('model').value;
+    $('model').replaceChildren(...models.map(([file, name]) => new Option(name, file)));
+    $('model').value = models.some(([file]) => file === current) ? current : models[0][0];
+    $('model').dataset.version = `${status?.finished || ''}|${scan.object?.detail}|${scan.object?.triangles}`;  // Reload when files change.
+    showModel(scan.id, $('model').value, $('model').dataset.version);
+  } else {
+    $('viewerEmpty').textContent = !scan.finished ? 'Finish the scan on the phone first.'
+      : mode === 'reconstruct' ? 'Press Reconstruct to build the 3D model.' : 'Download the photos and reconstruct on the GPU laptop.';
+    loadedModel = null;
+  }
+  renderRebuild(scan);
+  renderMasks(scan);
+  const covered = Math.round(100 * scan.coverage.have / scan.coverage.wanted);
+  $('facts').innerHTML = '';
+  for (const [value, name] of [[scan.photos.length, 'photos'], [`${covered}%`, 'angles covered'],
+                                [scan.size ? `${scan.size[0]}×${scan.size[1]}` : '–', 'photo size'],
+                                ...(scan.coverage.unguided ? [[scan.coverage.unguided, 'uploaded photos (no angle data)']] : []),
+                                ...(scan.object?.triangles ? [[scan.object.triangles.toLocaleString(), `triangles · ${scan.object.detail} detail`]] : [])]) {
+    const fact = document.createElement('div'); fact.className = 'fact';
+    fact.innerHTML = '<b></b><span class="meta"></span>';
+    fact.querySelector('b').textContent = value; fact.querySelector('.meta').textContent = name;
+    $('facts').append(fact);
+  }
+  const files = [...scan.files].sort((a, b) => Object.keys(LABELS).indexOf(a) - Object.keys(LABELS).indexOf(b));
+  const link = file => Object.assign(document.createElement('a'), {
+    className: 'button', href: `/scans/${scan.id}/${file}`, textContent: LABELS[file] || file, download: '' });
+  const filesKey = `${scan.id}|${files.join()}`;
+  if ($('downloads').dataset.key !== filesKey) {
+    $('downloads').dataset.key = filesKey;
+    const main = files.filter(file => PRIMARY.includes(file)), more = files.filter(file => !PRIMARY.includes(file));
+    $('downloads').replaceChildren(...(files.length ? main.map(link)
+      : [Object.assign(document.createElement('span'), { className: 'meta', textContent: 'Nothing to download yet.' })]));
+    $('moreDownloads').replaceChildren(...more.map(link));
+    $('moreBox').hidden = !more.length;
+    $('moreBox').open = !main.length && more.length > 0;
+  }
+  $('photoSummary').textContent = `Photos (${scan.photos.length})`;
+  const shown = $('thumbs').dataset.key, key = `${scan.id}:${scan.photos.length}`;
+  if (shown !== key) {
+    $('thumbs').dataset.key = key;
+    $('thumbs').replaceChildren(...scan.photos.map(photo => Object.assign(document.createElement('img'), {
+      src: `/scans/${scan.id}/images/${photo.name}`, loading: 'lazy',
+      alt: photo.ring === null ? photo.name : `${photo.name}: ${plan.rings[photo.ring].name} angle, side ${photo.sector + 1}` })));
+  }
+}
+
+function renderRebuild(scan) {
+  const show = mode === 'reconstruct' && scan.rebuildable && details && scan.status?.state !== 'running';
+  $('rebuild').hidden = !show;
+  if (!show) return;
+  if (!$('detailLevel').options.length) {
+    const names = { low: 'Low poly', standard: 'Standard', high: 'High' };
+    $('detailLevel').replaceChildren(...Object.entries(details).map(([key, value]) =>
+      new Option(`${names[key] || key} (${value.triangles.toLocaleString()} triangles)`, key)));
+    $('detailLevel').onchange = () => { $('rebuildNote').textContent = rebuildNote(); };
+  }
+  if ($('rebuild').dataset.scan !== scan.id) {
+    $('rebuild').dataset.scan = scan.id;
+    $('detailLevel').value = scan.object?.detail || 'standard';
+    $('rebuildNote').textContent = rebuildNote();
+  }
+  $('rebuildGo').onclick = async () => {
+    $('rebuildGo').disabled = true;
+    actionError = '';
+    try { await json(`/api/scans/${scan.id}/object?detail=${$('detailLevel').value}`, { method: 'POST' }); }
+    catch (error) { actionError = `Could not rebuild: ${error.message}`; }
+    $('rebuildGo').disabled = false;
+    refresh();
   };
 }
-async function send() {
-  if (!ws || ws.readyState !== WebSocket.OPEN || command || stopped || cameraStarting || inFlight) return;
-  if (importQueue.length) {
-    if (!importReady) { requestCommand('import'); return; }
-    const file = importQueue.shift();
-    inFlight = true;
-    try {
-      const bitmap = await createImageBitmap(file);
-      [grab.width, grab.height] = frameSize(bitmap.width, bitmap.height);
-      grab.getContext('2d').drawImage(bitmap, 0, 0, grab.width, grab.height); bitmap.close();
-      if (ws.readyState !== WebSocket.OPEN) throw new Error('Connection lost');
-      ws.send(file); // Preserve original bytes; the server stores a normalized working JPEG separately.
-    } catch (error) {
-      importFailures++; inFlight = false;
-      $('importStatus').textContent = 'Could not import ' + file.name + ': ' + error.message;
-      if (!importQueue.length) { if (ws.readyState === WebSocket.OPEN) ws.send('cancel_import'); importReady = false; }
-      schedule();
+
+function rebuildNote() {
+  const value = details?.[$('detailLevel').value];
+  return `${value ? `${value.texture} px texture. ` : ''}Rebuilds only the object, reusing this scan's camera positions and outlines (about a minute). The current files stay if it fails.`;
+}
+
+function renderMasks(scan) {
+  const masks = scan.masks;
+  $('masksBox').hidden = !masks;
+  if (!masks) return;
+  const total = (masks.sam2 || 0) + (masks.grabcut || 0);
+  const tapped = /tapped/.test(masks.prompt || '');
+  const parts = masks.sam2
+    ? [`SAM 2, a pretrained AI segmentation model running on this laptop, outlined the object in ${masks.sam2} of ${total} photos`
+       + (masks.grabcut ? ` (the other ${masks.grabcut} kept the basic outline, where SAM 2 disagreed with it)` : '') + '.',
+       tapped ? 'It was pointed at the object you tapped on the phone.'
+              : 'No tap was recorded for this scan, so it was pointed at the object\'s estimated centre.',
+       masks.device ? `Took ${masks.seconds} s on the ${masks.device.toUpperCase()}.` : '']
+    : [`Basic outlines (classical computer vision, no AI) in all ${total} photos.`, masks.note || ''];
+  $('maskSummary').textContent = `Outlines (${total})`;
+  $('masksText').textContent = `${parts.filter(Boolean).join(' ')} Green = the part used for the 3D shape and texture. Select a photo to see its outline enlarged.`;
+  const key = `${scan.id}:${scan.status?.finished || ''}:${masks.seconds}`;
+  if ($('maskThumbs').dataset.key === key) return;
+  $('maskThumbs').dataset.key = key;
+  $('maskThumbs').replaceChildren(...scan.photos.map(photo => {
+    const src = `/scans/${scan.id}/masks/${photo.name}?v=${encodeURIComponent(scan.status?.finished || '')}`;
+    const anchor = Object.assign(document.createElement('a'), { href: src, target: '_blank', rel: 'noopener', title: `Enlarge the outline of ${photo.name}` });
+    anchor.setAttribute('aria-label', `Enlarge the outline of ${photo.name}`);
+    const image = Object.assign(document.createElement('img'), { src, loading: 'lazy', alt: `Object outline for ${photo.name}` });
+    image.onerror = () => anchor.remove();  // Photos COLMAP could not place have no outline.
+    anchor.append(image);
+    return anchor;
+  }));
+}
+
+async function refresh() {
+  try {
+    plan ??= await json('/api/plan');
+    details ??= (await json('/api/health')).details;
+    const all = await json('/api/scans');
+    if (offline) { offline = false; loadConnect(); }
+    // Empty unfinished scans (phone opened, nothing taken) are noise; keep the newest and the selected one.
+    const scans = all.filter((scan, index) => index === 0 || scan.id === selected || scan.finished || scan.photos.length);
+    if (!scans.length) return;
+    selected ??= scans[0].id;
+    const key = JSON.stringify([selected, phoneConnected, mode, scans.map(s => [s.id, s.finished, s.status?.state, s.photos.length])]);
+    if (key !== listKey) {  // Keeps focus while idle.
+      listKey = key;
+      $('scans').replaceChildren(...scans.map(listItem));
+      $('scanPick').replaceChildren(...scans.map(scan => new Option(
+        `${scan.created ? new Date(scan.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : scan.id} · ${state(scan)[1]}`, scan.id)));
+      $('scanPick').value = selected;
     }
-    return;
-  }
-  if (!stream) return;
-  if (!v.videoWidth || v.readyState < 2) { schedule(); return; }
-  inFlight = true;
-  [grab.width, grab.height] = frameSize(v.videoWidth, v.videoHeight);
-  grab.getContext('2d').drawImage(v, 0, 0, grab.width, grab.height);
-  grab.toBlob(b => {
-    if (b && ws.readyState === WebSocket.OPEN) ws.send(b);
-    else { inFlight = false; if (command) dispatchCommand(); else schedule(); }
-  }, 'image/jpeg', .9);
-}
-$('reset').onclick = () => requestCommand('reset');
-$('capture').onclick = () => requestCommand('capture');
-$('finish').onclick = () => requestCommand('finish');
-
-function renderProcessed() {
-  const canvas = $('processed'), c = canvas.getContext('2d');
-  canvas.width = analyzedFrame.width || 960; canvas.height = analyzedFrame.height || 540;
-  const w = canvas.width, h = canvas.height;
-  c.fillStyle = '#080b10'; c.fillRect(0, 0, w, h);
-  if (analyzedFrame.width) c.drawImage(analyzedFrame, 0, 0);
-  if (!lastOverlay) {
-    c.fillStyle = '#fff'; c.font = '20px system-ui'; c.fillText('Waiting for an analyzed frame…', 20, 35);
-    return;
-  }
-  const o = lastOverlay, sx = w / o.width, sy = h / o.height;
-  c.lineWidth = Math.max(1.5, w / 600);
-  if ($('showTrails').checked) {
-    c.strokeStyle = '#ffbd59';
-    for (const [x0, y0, x1, y1] of o.trails) {
-      c.beginPath(); c.moveTo(x0 * sx, y0 * sy); c.lineTo(x1 * sx, y1 * sy); c.stroke();
-    }
-  }
-  function dots(points, color, radius) {
-    c.fillStyle = color;
-    for (const [x, y] of points) { c.beginPath(); c.arc(x * sx, y * sy, radius, 0, Math.PI * 2); c.fill(); }
-  }
-  if ($('showPoints').checked) { dots(o.points, '#6de7ff', 2.6); dots(o.inliers, '#6dff91', 4); }
-  if ($('showBox').checked && o.box) {
-    const [x0, y0, x1, y1] = o.box;
-    c.strokeStyle = '#ffbd59'; c.strokeRect(x0 * sx, y0 * sy, (x1 - x0) * sx, (y1 - y0) * sy);
-    c.font = '17px system-ui';
-    const label = 'Feature region';
-    const y = Math.max(27, y0 * sy);
-    c.fillStyle = '#151b24'; c.fillRect(x0 * sx, y - 26, c.measureText(label).width + 16, 26);
-    c.fillStyle = '#ffbd59'; c.fillText(label, x0 * sx + 8, y - 7);
-  }
-  if (savedFlash) {
-    c.strokeStyle = '#6dff91'; c.lineWidth = 8; c.strokeRect(4, 4, w - 8, h - 8);
-  }
-  const label = savedFlash ? 'PHOTO SAVED · ' + previousSavedCount : 'Saved photos: ' + previousSavedCount;
-  c.font = '18px system-ui'; c.fillStyle = 'rgba(8,11,16,.88)';
-  c.fillRect(12, h - 46, c.measureText(label).width + 24, 34);
-  c.fillStyle = savedFlash ? '#6dff91' : '#fff'; c.fillText(label, 24, h - 23);
-}
-for (const id of ['showBox', 'showPoints', 'showTrails']) $(id).onchange = renderProcessed;
-
-/* ---- coverage dome ---- */
-function draw() {
-  const c = 120, R = 112, edges = [R, R * .62, R * .3, 0];   // outer = low elevation
-  ctx.clearRect(0, 0, 240, 240);
-  for (let ring = 0; ring < RINGS; ring++) for (let a = 0; a < AZ; a++) {
-    const a0 = -Math.PI / 2 + a * 2 * Math.PI / AZ, a1 = a0 + 2 * Math.PI / AZ;
-    ctx.beginPath(); ctx.arc(c, c, edges[ring], a0, a1); ctx.arc(c, c, edges[ring + 1], a1, a0, true); ctx.closePath();
-    ctx.fillStyle = bins[ring * AZ + a] ? '#5fb3a1' : 'rgba(217,154,58,.28)'; ctx.fill();
-    ctx.strokeStyle = '#1f2226'; ctx.lineWidth = 2; ctx.stroke();
-  }
-  if (cur) {
-    const ang = -Math.PI / 2 + (cur[0] + Math.PI) / 2 / Math.PI * 2 * Math.PI * 1, r = R * (1 - Math.min(Math.max(cur[1], 0), 90) / 90) * .95;
-    ctx.beginPath(); ctx.arc(c + r * Math.cos(ang), c + r * Math.sin(ang), 6, 0, 7); ctx.fillStyle = '#e8e3d8'; ctx.fill();
+    renderDetail(scans.find(scan => scan.id === selected) || null);
+  } catch {
+    offline = true;
+    pill('pillMode', 'Scanner not responding · retrying', 'bad');
   }
 }
-
-if (!navigator.mediaDevices?.getUserMedia) $('cameraStatus').textContent = cameraError(new Error('Camera API unavailable'), window.isSecureContext);
-draw(); renderProcessed(); connect();
+$('scanPick').onchange = () => { selected = $('scanPick').value; actionError = ''; listKey = ''; refresh(); };
+if (matchMedia('(pointer: coarse)').matches) $('viewerHint').textContent = 'Drag to rotate · pinch to zoom · two-finger drag to pan';
+loadConnect(); refresh();
+setInterval(refresh, 3000); setInterval(loadConnect, 5000);
 </script>
 </body>
 </html>

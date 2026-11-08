@@ -8,7 +8,26 @@ mode = "capture"
 colmap = 'colmap'
 blender = 'blender'
 
-# Initial bounded preset, not a guarantee of fitting in 8 GB VRAM.
-quality = "low"
+# Dense-stereo image size: low = 1000 px, medium = 1600 px, high = 2400 px (COLMAP presets).
+# Phone photos are 1920 px or more, so low throws most detail away. Drop to low if 8 GB VRAM runs out.
+quality = "medium"
 timeout_seconds = 1800
 max_photos = 100
+
+# Phone capture: lan = true serves https://<laptop Wi-Fi address>:8443 for the phone.
+# Needs the certificate from: .venv/Scripts/python.exe -m scripts.make_cert (see docs/PHONE_SETUP.md).
+lan = false
+port = 8443
+tls_cert = 'certs/lan.pem'
+tls_key = 'certs/lan-key.pem'
+
+# Object masks: "auto" uses SAM 2 when .venv-sam2 and the checkpoint exist (see models/README.md),
+# otherwise GrabCut. "grabcut" turns SAM 2 off; "sam2" is like auto but flags a missing install.
+masks = "auto"
+# segmentation_python = '.venv-sam2/Scripts/python.exe'   # default: .venv-sam2 in this folder
+sam2_checkpoint = 'models/sam2.1_hiera_tiny.pt'
+segmentation_device = "auto"   # auto, cuda or cpu
+
+# Game asset (object.glb): low = 1,000 triangles / 1024 px texture (low poly), standard = 5,000 / 2048,
+# high = 20,000 / 4096. The dashboard can rebuild a scan at another detail without rerunning COLMAP.
+detail = "standard"

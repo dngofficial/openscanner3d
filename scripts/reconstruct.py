@@ -9,7 +9,19 @@ import uuid
 
 from backend.app.config import ROOT, load_settings
 from backend.app.reconstruction import reconstruct
-from backend.app.images import decode_jpeg
+from backend.app.images import MAX_UPLOAD_BYTES, decode_jpeg
+
+
+def carry_poses(source: Path, files: list[Path], output: Path) -> None:
+    """Keep the phone's angles and tap when the folder came from a scan.zip (poses.json beside images/)."""
+    try:
+        poses = {pose['name']: pose for pose in json.loads((source.parent / 'poses.json').read_text(encoding='utf-8'))}
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    blank = dict(azimuth=None, pitch=None, ring=None, sector=None, imported=True, quality={})
+    kept = [{**poses.get(path.name, blank), 'name': f'kf_{index:04d}.jpg'} for index, path in enumerate(files)]
+    if any(path.name in poses for path in files):
+        (output / 'poses.json').write_text(json.dumps(kept, indent=2), encoding='utf-8')
 
 
 def main() -> int:
@@ -31,11 +43,12 @@ def main() -> int:
     shape = None
     try:
         for index, source in enumerate(files):
-            if source.stat().st_size > 5 * 1024 * 1024:
-                raise ValueError(f'{source.name} exceeds the 5 MB frame limit')
+            if source.stat().st_size > MAX_UPLOAD_BYTES:
+                raise ValueError(f'{source.name} exceeds the 25 MB photo limit')
             data = source.read_bytes()
-            _, shape = decode_jpeg(data, shape)
+            _, shape = decode_jpeg(data, shape, MAX_UPLOAD_BYTES)
             (images / f'kf_{index:04d}.jpg').write_bytes(data)
+        carry_poses(args.images, files, output)
         started = time.monotonic()
         result = reconstruct(images, output, settings)
         result['elapsed_seconds'] = round(time.monotonic() - started, 2)
@@ -43,6 +56,11 @@ def main() -> int:
         result = {'done': False, 'msg': str(error)}
     result['output_directory'] = str(output)
     (output / 'result.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+    try:
+        from scripts.register_scan import register
+        register(output)  # So the scan appears on the dashboard like a phone scan.
+    except (ValueError, OSError) as error:
+        print(f'Could not register the scan for the dashboard: {error}', file=sys.stderr)
     print(json.dumps(result, indent=2))
     return 0 if result.get('model_ready') else 1
 

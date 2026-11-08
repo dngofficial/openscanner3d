@@ -12,7 +12,20 @@ Assume a 24–48-hour event, one processing computer, and one active scan. The c
 
 - Development laptop: integrated graphics usable; CPU capture and orchestration tests can run here.
 - Partner reconstruction laptop: Windows, RTX 3070 Ti Laptop with 8 GB VRAM, 32 GB RAM (user-reported; real reconstruction validation pending).
-- Initial phone route: Camo Camera on iPhone or Samsung Galaxy S26 Ultra feeds Camo Studio on the laptop; the laptop-local browser selects the Camo virtual webcam. Partner reports the initial iPhone setup works; Samsung physical-device acceptance remains pending.
+- Phone route (revamp, November 7, 2026): the phone's own browser connects directly to the laptop over trusted LAN HTTPS (mkcert root installed on the phone). Camo has been removed. The phone uses its motion sensors to guide capture over a 12-side × 3-height checklist and auto-captures at missing angles; the laptop checks and stores each photo.
+
+### Revamp status (branch claude/mobile-guided-capture, based on main)
+
+- [x] LAN HTTPS serving, private-network-only guard, per-launch key moved to an HttpOnly cookie, laptop-only QR/link endpoint, cross-site POST refusal.
+- [x] Phone page: rear camera, iPhone motion-permission flow, sensor-based azimuth/pitch, nearest-missing-angle instructions with arrows, steadiness and exposure gating, auto-capture, vibration/beep feedback, undo, finish, resume with re-align.
+- [x] Server photo checks (exposure, sharpness, contrast; one named cause), consistent orientation, angle bookkeeping (`poses.json`), finish → `scan.zip`, background COLMAP start with status.
+- [x] Laptop dashboard: QR code or the exact connection problem, scans with checklist maps, thumbnails, downloads, Reconstruct.
+- [x] Tests: guidance maths (Node), API/access control/uploads (Python), setup smoke check. Browser run with a synthetic camera and simulated sensors.
+- [ ] Real iPhone and Android test with the mkcert root (see docs/PHONE_SETUP.md checklist).
+- [x] Object from silhouettes (`object.glb`): table plane from dense points, cameras' convergence point, geometry-seeded GrabCut outlines (two passes), visual-hull carving, marching cubes, median vertex colours, upright y-up export, and `scripts.rebuild_object` for existing runs. First real scan (36 photos, black bottle): the scene mesh was a table with a hole, while object.glb was an upright bottle shape in about 60 s on CPU. Tested on a synthetic cylinder scene. Masks are classical CV; an ML segmenter can supply masks instead.
+- [x] Capture: "fill the circle" cue with a larger target, 4K camera request, `quality = "medium"` default.
+- [ ] Fast feed-forward reconstruction path (VGGT or Fast3R from the guided photos, automatic background removal, Poisson mesh), validated on the GPU laptop.
+- [ ] Viewer with wireframe toggle; optional quad remesh with colour re-baked.
 - Implemented foundation: capture/reconstruct modes, configured tool paths, constrained Python dependencies, Windows setup/launch scripts, doctor report, bounded reconstruction attempts, and photo-import fallback. See `docs/PARTNER_SETUP.md` and `docs/PHONE_SETUP.md`.
 - Phase 0's real GPU/textured-model gate moves to the partner machine. CPU tests or a synthetic mesh export do not satisfy it. Texturing, segmentation, Blender cleanup, and the 3D viewer remain outstanding.
 

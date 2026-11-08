@@ -1,14 +1,13 @@
 # Demo validation
 
-The existing phone recording is local input under `sample-data/`; it is not a verified reconstruction dataset or a generated model. Keep recordings and generated artifacts out of Git.
+Keep recordings, scans and generated models out of Git. `scans/` and `sample-data/` are ignored.
 
 Before presenting the demo, record:
 
-- Input provenance, capture conditions, frame selection, and permissions.
-- Exact tool versions and commands for reconstruction, texturing, and export.
-- Runtime, image registration results, output location, and observed defects.
-- Inspection of the real GLB in both the web viewer and Blender.
-- Local segmentation inference and whether masks actually affect the export.
-- Offline verification with LAN connectivity retained.
+- Where the input came from: object, capture conditions, guided-scan coverage (angles covered out of 36), and permissions.
+- Exact tool versions and commands for reconstruction.
+- Runtime, image registration results, output location and visible defects.
+- An inspection of the real `mesh.glb` in Blender.
+- An offline run: internet disconnected, phone and laptop still on the same Wi-Fi.
 
-Keep the input set and its successfully generated output locally as a labeled fallback. Never present a saved result as a newly completed scan.
+Keep one input scan and its successfully generated output locally as a clearly labelled fallback. Never present a saved result as a newly completed scan.

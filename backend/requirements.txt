@@ -5,3 +5,7 @@ numpy
 opencv-python
 trimesh
 Pillow
+segno
+scikit-image
+fast-simplification
+xatlas

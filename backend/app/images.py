@@ -6,6 +6,7 @@ from PIL import Image, ImageOps
 
 MAX_FRAME_BYTES = 5 * 1024 * 1024
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_WORKING_EDGE = 3200             # Imported photos keep most of a 12 MP phone photo's detail.
 
 
 def check_dimensions(image):
@@ -13,8 +14,8 @@ def check_dimensions(image):
         raise ValueError("Use an image of 32–8192 pixels per side and at most 16 megapixels (try your phone's 12 MP mode).")
 
 
-def decode_jpeg(data: bytes, expected_shape=None):
-    if len(data) > MAX_FRAME_BYTES:
+def decode_jpeg(data: bytes, expected_shape=None, max_bytes=MAX_FRAME_BYTES):
+    if len(data) > max_bytes:
         raise ValueError("Frame too large; reduce the capture resolution.")
     with Image.open(io.BytesIO(data)) as image:
         if image.format != "JPEG":
@@ -35,10 +36,10 @@ def normalize_photo(data: bytes):
     with Image.open(io.BytesIO(data)) as original:
         suffix = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}.get(original.format)
         if not suffix:
-            raise ValueError("Import JPEG, PNG, or WebP. HEIC is not supported yet.")
+            raise ValueError("Upload JPEG, PNG, or WebP photos. HEIC is not supported; iPhone usually converts it automatically.")
         check_dimensions(original)
         image = ImageOps.exif_transpose(original).convert("RGB")
-        image.thumbnail((1280, 1280))
+        image.thumbnail((MAX_WORKING_EDGE, MAX_WORKING_EDGE))
         output = io.BytesIO()
         image.save(output, format="JPEG", quality=95)
         return output.getvalue(), suffix
