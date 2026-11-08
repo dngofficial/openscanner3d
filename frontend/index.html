@@ -3,59 +3,135 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Object scanner</title>
+<title>OpenScanner 3D</title>
+<script type="importmap">{"imports": {"three": "/vendor/three/three.module.min.js"}}</script>
 <style>
-  :root { --bg:#14161a; --panel:#1e2126; --line:#353a41; --ink:#ece8df; --dim:#9a9d9f; --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; }
+  :root { --bg:#121417; --panel:#1b1e22; --raised:#23272c; --line:#33383f; --ink:#ece8df; --dim:#9a9ea2;
+          --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; --info:#6ea8fe; --radius:10px; }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui, sans-serif; padding:24px 16px; }
-  main { max-width:1100px; margin:0 auto; display:grid; gap:20px; }
-  h1 { font-size:24px; margin:0; } h2 { font-size:17px; margin:0 0 10px; }
-  section { background:var(--panel); border-radius:8px; padding:18px; }
-  .connect { display:grid; grid-template-columns:auto 1fr; gap:20px; align-items:start; }
-  @media (max-width:700px) { .connect { grid-template-columns:1fr; } }
-  #qr svg { display:block; width:220px; height:220px; border-radius:6px; }
-  #qr:empty { display:none; }
-  code { background:#0f1114; padding:2px 6px; border-radius:4px; word-break:break-all; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; padding:16px 24px;
+           border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+  h1 { font-size:20px; margin:0; letter-spacing:.01em; }
+  .brand span { display:block; font-size:12px; color:var(--dim); } h2 { font-size:16px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; color:var(--dim); font-weight:600; }
+  .pills { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { font-size:13px; font-weight:600; padding:4px 10px; border-radius:999px; background:var(--raised); border:1px solid var(--line); }
+  .pill::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--dim); vertical-align:1px; }
+  .pill.ok::before { background:var(--ok); } .pill.warn::before { background:var(--warn); } .pill.bad::before { background:var(--bad); }
+  main { display:grid; grid-template-columns:minmax(280px, 360px) minmax(0, 1fr); gap:20px; padding:20px 24px; max-width:1400px; margin:0 auto; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; padding:16px; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px; }
+  .stack { display:grid; gap:20px; align-content:start; }
+  button, a.button { font:inherit; font-weight:600; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px;
+                     padding:8px 12px; text-decoration:none; cursor:pointer; display:inline-flex; align-items:center; gap:6px; min-height:36px; }
+  button.go { background:var(--ok); border-color:var(--ok); color:#06201b; }
+  button[aria-pressed="true"] { background:#2f4a44; border-color:var(--ok); }
+  button:disabled { opacity:.5; cursor:default; }
+  button:focus-visible, a.button:focus-visible, .scan:focus-visible { outline:2px solid var(--info); outline-offset:2px; }
+  /* connect */
+  .connect { display:grid; grid-template-columns:auto 1fr; gap:16px; align-items:start; }
+  .connect.compact { grid-template-columns:1fr; }
+  #qr svg { display:block; width:180px; height:180px; border-radius:6px; }
+  .connect.compact #qr { display:none; }
   .problem { color:var(--warn); margin:4px 0; }
-  .scan { border-top:1px solid var(--line); padding:14px 0; display:grid; grid-template-columns:150px 1fr; gap:16px; }
-  .scan:first-of-type { border-top:0; }
-  .scan canvas { width:150px; height:150px; }
-  .meta { color:var(--dim); font-size:14px; }
-  .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-  a, button { font:inherit; color:var(--ink); }
-  a.button, button { background:#2a2e34; border:1px solid #4a4f57; border-radius:6px; padding:8px 12px; text-decoration:none; cursor:pointer; }
-  button.go { background:var(--ok); border-color:var(--ok); color:#06201b; font-weight:600; }
-  .thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(84px, 1fr)); gap:6px; margin-top:10px; }
+  code { background:#0e1013; padding:2px 6px; border-radius:4px; word-break:break-all; font-size:12px; }
+  .meta { color:var(--dim); font-size:13px; }
+  /* scan list */
+  #scans { display:grid; gap:8px; }
+  .scan { display:grid; grid-template-columns:64px 1fr; gap:12px; align-items:center; padding:10px; border-radius:8px; border:1px solid transparent;
+          background:var(--raised); cursor:pointer; text-align:left; width:100%; color:var(--ink); font:inherit; }
+  .scan[aria-current="true"] { border-color:var(--ok); }
+  .scan canvas { width:64px; height:64px; }
+  .scan b { display:block; font-size:14px; }
+  .badge { display:inline-block; font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; margin-top:4px; }
+  .badge.capturing { background:#3d3220; color:var(--warn); } .badge.ready { background:#1f3a35; color:var(--ok); }
+  .badge.running { background:#1f2c3f; color:var(--info); } .badge.failed { background:#3d2220; color:var(--bad); }
+  .badge.saved { background:#2a2d31; color:var(--ink); }
+  .empty { color:var(--dim); text-align:center; padding:24px 8px; }
+  /* detail */
+  .detail-head { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+  #viewerBox { position:relative; margin-top:12px; border-radius:var(--radius); overflow:hidden; background:#0e1013; border:1px solid var(--line); }
+  #viewer canvas { display:block; }
+  #viewerEmpty { padding:48px 16px; text-align:center; color:var(--dim); }
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+  select { font:inherit; color:var(--ink); background:var(--raised); border:1px solid #4a4f57; border-radius:8px; padding:7px 10px; min-height:36px; }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-top:12px; }
+  .fact { background:var(--raised); border-radius:8px; padding:10px; } .fact b { display:block; font-size:18px; }
+  .downloads { display:flex; flex-wrap:wrap; gap:8px; }
+  .thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px, 1fr)); gap:6px; }
   .thumbs img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; background:#000; }
-  .state-ready { color:var(--ok); } .state-failed, .state-interrupted { color:var(--bad); } .state-running { color:var(--warn); }
+  .spinner { width:14px; height:14px; border:2px solid var(--info); border-right-color:transparent; border-radius:50%; display:inline-block; }
+  @media (prefers-reduced-motion:no-preference) { .spinner { animation:spin 1s linear infinite; } }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #status { margin-top:10px; }
   [hidden] { display:none !important; }
 </style>
 </head>
 <body>
+<header>
+  <div class="brand"><h1>OpenScanner 3D</h1><span>Local 3D object scanner</span></div>
+  <div class="pills" aria-live="polite">
+    <span class="pill" id="pillMode">Mode</span>
+    <span class="pill" id="pillPhone">Phone</span>
+  </div>
+</header>
 <main>
-  <h1>Object scanner</h1>
-  <section>
-    <h2>Connect your phone</h2>
-    <div class="connect">
-      <div id="qr" aria-label="QR code with the phone link"></div>
-      <div>
-        <p id="connectHelp">Loading…</p>
-        <div id="problems"></div>
-        <p id="urls"></p>
-        <p class="meta">The phone must be on the same Wi-Fi and trust this laptop's certificate once (see docs/PHONE_SETUP.md). The link contains a key that changes every time the scanner starts.</p>
+  <div class="stack">
+    <section aria-labelledby="connectTitle">
+      <h2 id="connectTitle">Connect a phone</h2>
+      <div class="connect" id="connect">
+        <div id="qr" aria-label="QR code with the phone link"></div>
+        <div>
+          <p id="connectHelp" class="meta">Loading…</p>
+          <div id="problems"></div>
+          <p id="urls"></p>
+          <button id="toggleQr" hidden>Show QR code</button>
+        </div>
       </div>
+    </section>
+    <section aria-labelledby="scansTitle">
+      <h2 id="scansTitle">Scans</h2>
+      <div id="scans"><p class="empty">No scans yet. Scan the QR code with your phone and tap Start scanning.</p></div>
+    </section>
+  </div>
+  <section id="detail" aria-live="polite">
+    <div id="detailEmpty" class="empty">Select a scan to see its photos, status and 3D model.</div>
+    <div id="detailBody" hidden>
+      <div class="detail-head">
+        <div><h2 id="detailTitle" style="margin:0"></h2><span id="detailBadge" class="badge"></span></div>
+        <div id="actions"></div>
+      </div>
+      <p id="status" class="meta"></p>
+      <div id="viewerBox">
+        <div id="viewer"></div>
+        <div id="viewerEmpty">No 3D model yet.</div>
+      </div>
+      <div class="toolbar" id="viewerTools" hidden>
+        <label class="meta" for="model">Model</label>
+        <select id="model"></select>
+        <button id="wire" aria-pressed="false">Wireframe</button>
+        <button id="spin" aria-pressed="false">Turntable</button>
+        <button id="resetView">Reset view</button>
+        <span class="meta" id="modelStats"></span>
+      </div>
+      <div class="facts" id="facts"></div>
+      <h3>Downloads</h3>
+      <div class="downloads" id="downloads"></div>
+      <h3>Photos</h3>
+      <div class="thumbs" id="thumbs"></div>
     </div>
-  </section>
-  <section>
-    <h2>Scans</h2>
-    <div id="scans"><p class="meta">No scans yet. Start one from the phone.</p></div>
   </section>
 </main>
 <script type="module">
 import { drawCoverage } from '/guidance.mjs';
 const $ = id => document.getElementById(id);
-let plan = null, mode = 'capture';
-const open = new Set();
+let plan = null, mode = 'capture', selected = null, viewer = null, loadedModel = null, qrForced = false;
+const LABELS = {
+  'object.glb': 'Object · GLB', 'object_hires.glb': 'Object, high detail · GLB', 'object.obj': 'Object · OBJ',
+  'object.mtl': 'Object material · MTL', 'object_albedo.png': 'Object texture · PNG', 'mesh.glb': 'Whole scene · GLB',
+  'mesh.obj': 'Whole scene · OBJ', 'scan.zip': 'Photos + angles · ZIP', 'colmap.log': 'COLMAP log',
+};
+const MODELS = [['object.glb', 'Object'], ['object_hires.glb', 'Object (high detail)'], ['mesh.glb', 'Whole scene']];
 
 async function json(path, options) {
   const response = await fetch(path, options);
@@ -63,67 +139,151 @@ async function json(path, options) {
   if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
   return body;
 }
+function pill(id, text, level) { const el = $(id); el.textContent = text; el.className = `pill ${level}`; }
+
+function state(scan) {
+  const status = scan.status?.state;
+  if (!scan.finished) return ['capturing', 'Capturing on phone'];
+  if (status === 'running') return ['running', 'Reconstructing'];
+  if (status === 'ready') return ['ready', 'Model ready'];
+  if (status === 'failed' || status === 'interrupted') return ['failed', status === 'failed' ? 'Failed' : 'Interrupted'];
+  return mode === 'reconstruct' ? ['saved', 'Ready to reconstruct'] : ['saved', 'Photos saved'];
+}
 
 async function loadConnect() {
   try {
     const info = await json('/api/connect');
     mode = info.mode;
+    pill('pillMode', mode === 'reconstruct' ? 'Reconstruct mode' : 'Capture mode', mode === 'reconstruct' ? 'ok' : '');
+    const seen = info.phone_seen_seconds;
+    const connected = seen !== null && seen !== undefined && seen < 30;
+    pill('pillPhone', connected ? `Phone connected · ${seen}s ago` : info.lan ? 'No phone yet' : 'Phone access off', connected ? 'ok' : 'warn');
     $('qr').innerHTML = info.qr_svg || '';
-    $('connectHelp').textContent = info.urls.length && info.lan
-      ? 'Scan this QR code with the phone camera, or open the link below in Safari / Chrome on the phone.'
-      : 'The phone cannot connect yet:';
+    const usable = info.lan && info.urls.length && info.qr_svg;
+    $('connect').classList.toggle('compact', !usable || (connected && !qrForced));
+    $('toggleQr').hidden = !(usable && connected);
+    $('toggleQr').textContent = qrForced ? 'Hide QR code' : 'Show QR code';
+    $('connectHelp').textContent = !usable ? 'The phone cannot connect yet:'
+      : connected ? 'A phone is connected. Scan the QR code again on another phone if needed.'
+      : 'Scan this QR code with the phone camera (same Wi-Fi), or open the link below in Safari or Chrome.';
     $('problems').replaceChildren(...info.problems.map(text => Object.assign(document.createElement('p'), { className: 'problem', textContent: text })));
-    $('urls').replaceChildren(...(info.lan ? info.urls : []).map(url => { const c = document.createElement('code'); c.textContent = url; return c; }));
-  } catch (error) {
+    $('urls').replaceChildren(...(usable ? info.urls.slice(0, 1) : []).map(url => Object.assign(document.createElement('code'), { textContent: url })));
+  } catch {
     $('connectHelp').textContent = 'Open this page on the laptop itself (localhost) to see the phone link.';
   }
 }
+$('toggleQr').onclick = () => { qrForced = !qrForced; loadConnect(); };
 
-function card(scan) {
-  const row = document.createElement('div'); row.className = 'scan';
-  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 300;
-  drawCoverage(canvas.getContext('2d'), 300, plan, scan.coverage.counts);
-  const body = document.createElement('div');
-  const status = scan.status ? ` · reconstruction: <span class="state-${scan.status.state}">${scan.status.state}</span>` : '';
-  body.innerHTML = `<strong>${scan.id}</strong> ${scan.finished ? '' : '<span class="state-running">(capturing)</span>'}
-    <div class="meta">${scan.photos.length} photos · ${scan.coverage.have} of ${scan.coverage.wanted} angles${scan.coverage.unguided ? ` · ${scan.coverage.unguided} without angle data` : ''}${status}</div>
-    <div class="meta">${scan.status?.message || ''}</div>`;
-  const actions = document.createElement('div'); actions.className = 'actions';
-  for (const file of scan.files) {
-    actions.append(Object.assign(document.createElement('a'), { className: 'button', href: `/scans/${scan.id}/${file}`, textContent: `Download ${file}` }));
+function listItem(scan) {
+  const [kind, label] = state(scan);
+  const item = document.createElement('button');
+  item.className = 'scan'; item.setAttribute('aria-current', String(scan.id === selected));
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
+  drawCoverage(canvas.getContext('2d'), 128, plan, scan.coverage.counts);
+  const text = document.createElement('div');
+  const created = scan.created ? new Date(scan.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : scan.id;
+  text.innerHTML = `<b></b><span class="meta"></span><br><span class="badge ${kind}"></span>`;
+  text.querySelector('b').textContent = created;
+  text.querySelector('.meta').textContent = `${scan.photos.length} photos · ${Math.round(100 * scan.coverage.have / scan.coverage.wanted)}% of angles`;
+  text.querySelector('.badge').textContent = label;
+  item.append(canvas, text);
+  item.onclick = () => { selected = scan.id; refresh(); };
+  return item;
+}
+
+async function showModel(scanId, file) {
+  const key = `${scanId}/${file}`;
+  if (loadedModel === key) return;
+  loadedModel = key;
+  $('modelStats').textContent = 'Loading…';
+  try {
+    if (!viewer) {
+      const { createViewer } = await import('/viewer.mjs');
+      viewer = createViewer($('viewer'));
+    }
+    const info = await viewer.load(`/scans/${scanId}/${file}?v=${Date.now()}`);
+    $('modelStats').textContent = `${info.triangles.toLocaleString()} triangles · ${info.textured ? 'UV texture' : info.vertexColours ? 'vertex colours' : 'no colour'}`;
+    viewer.setWireframe($('wire').getAttribute('aria-pressed') === 'true');
+  } catch (error) {
+    $('modelStats').textContent = `Could not display ${file}: ${error.message}`;
+    loadedModel = null;
   }
-  if (scan.finished && mode === 'reconstruct' && scan.status?.state !== 'running') {
-    const go = Object.assign(document.createElement('button'), { className: 'go', textContent: 'Reconstruct' });
+}
+$('model').onchange = () => showModel(selected, $('model').value);
+for (const [id, apply] of [['wire', on => viewer?.setWireframe(on)], ['spin', on => viewer?.setTurntable(on)]]) {
+  $(id).onclick = () => { const on = $(id).getAttribute('aria-pressed') !== 'true'; $(id).setAttribute('aria-pressed', String(on)); apply(on); };
+}
+$('resetView').onclick = () => viewer?.reset();
+
+function renderDetail(scan) {
+  $('detailEmpty').hidden = !!scan; $('detailBody').hidden = !scan;
+  if (!scan) return;
+  const [kind, label] = state(scan);
+  $('detailTitle').textContent = scan.created ? new Date(scan.created).toLocaleString() : scan.id;
+  $('detailBadge').className = `badge ${kind}`; $('detailBadge').textContent = label;
+  const status = scan.status;
+  $('status').innerHTML = '';
+  if (status?.state === 'running') $('status').innerHTML = '<span class="spinner"></span> ';
+  $('status').append(status?.message || (scan.finished ? '' : 'The phone is still capturing; this page updates as photos arrive.'));
+  const actions = [];
+  if (scan.finished && mode === 'reconstruct' && status?.state !== 'running') {
+    const go = Object.assign(document.createElement('button'), {
+      className: 'go', textContent: status?.state === 'ready' ? 'Reconstruct again' : status ? 'Retry reconstruction' : 'Reconstruct' });
     go.onclick = async () => {
       go.disabled = true;
-      try { await json(`/api/scans/${scan.id}/reconstruct`, { method: 'POST' }); } catch (error) { alert(error.message); }
+      try { await json(`/api/scans/${scan.id}/reconstruct`, { method: 'POST' }); } catch (error) { $('status').textContent = error.message; }
       refresh();
     };
-    actions.append(go);
+    actions.push(go);
   }
-  const toggle = Object.assign(document.createElement('button'), { textContent: open.has(scan.id) ? 'Hide photos' : 'Show photos' });
-  toggle.onclick = () => { open.has(scan.id) ? open.delete(scan.id) : open.add(scan.id); refresh(); };
-  if (scan.photos.length) actions.append(toggle);
-  body.append(actions);
-  if (open.has(scan.id)) {
-    const thumbs = document.createElement('div'); thumbs.className = 'thumbs';
-    thumbs.append(...scan.photos.map(photo => Object.assign(document.createElement('img'), {
+  $('actions').replaceChildren(...actions);
+  const models = MODELS.filter(([file]) => scan.files.includes(file));
+  $('viewerTools').hidden = !models.length; $('viewerEmpty').hidden = !!models.length; $('viewer').hidden = !models.length;
+  if (models.length) {
+    const current = $('model').value;
+    $('model').replaceChildren(...models.map(([file, name]) => new Option(name, file)));
+    $('model').value = models.some(([file]) => file === current) ? current : models[0][0];
+    showModel(scan.id, $('model').value);
+  } else {
+    $('viewerEmpty').textContent = !scan.finished ? 'Finish the scan on the phone first.'
+      : mode === 'reconstruct' ? 'Press Reconstruct to build the 3D model.' : 'Download the photos and reconstruct on the GPU laptop.';
+    loadedModel = null;
+  }
+  const covered = Math.round(100 * scan.coverage.have / scan.coverage.wanted);
+  $('facts').innerHTML = '';
+  for (const [value, name] of [[scan.photos.length, 'photos'], [`${covered}%`, 'angles covered'],
+                                [scan.size ? `${scan.size[0]}×${scan.size[1]}` : '–', 'photo size'],
+                                [scan.coverage.unguided || 0, 'without angle data']]) {
+    const fact = document.createElement('div'); fact.className = 'fact';
+    fact.innerHTML = '<b></b><span class="meta"></span>';
+    fact.querySelector('b').textContent = value; fact.querySelector('.meta').textContent = name;
+    $('facts').append(fact);
+  }
+  const files = [...scan.files].sort((a, b) => Object.keys(LABELS).indexOf(a) - Object.keys(LABELS).indexOf(b));
+  $('downloads').replaceChildren(...(files.length ? files.map(file => Object.assign(document.createElement('a'), {
+    className: 'button', href: `/scans/${scan.id}/${file}`, textContent: LABELS[file] || file, download: '' }))
+    : [Object.assign(document.createElement('span'), { className: 'meta', textContent: 'Nothing to download yet.' })]));
+  const shown = $('thumbs').dataset.key, key = `${scan.id}:${scan.photos.length}`;
+  if (shown !== key) {
+    $('thumbs').dataset.key = key;
+    $('thumbs').replaceChildren(...scan.photos.map(photo => Object.assign(document.createElement('img'), {
       src: `/scans/${scan.id}/images/${photo.name}`, loading: 'lazy',
-      alt: photo.ring === null ? photo.name : `${photo.name}, ${['low', 'mid', 'high'][photo.ring]} angle, side ${photo.sector + 1}` })));
-    body.append(thumbs);
+      alt: photo.ring === null ? photo.name : `${photo.name}: ${plan.rings[photo.ring].name} angle, side ${photo.sector + 1}` })));
   }
-  row.append(canvas, body);
-  return row;
 }
 
 async function refresh() {
   try {
     plan ??= await json('/api/plan');
     const scans = await json('/api/scans');
-    if (scans.length) $('scans').replaceChildren(...scans.map(card));
+    if (!scans.length) return;
+    selected ??= scans[0].id;
+    $('scans').replaceChildren(...scans.map(listItem));
+    renderDetail(scans.find(scan => scan.id === selected) || null);
   } catch { /* keep the last view; the server may be restarting */ }
 }
-loadConnect(); refresh(); setInterval(refresh, 3000);
+loadConnect(); refresh();
+setInterval(refresh, 3000); setInterval(loadConnect, 5000);
 </script>
 </body>
 </html>

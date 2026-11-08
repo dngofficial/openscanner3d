@@ -46,7 +46,7 @@ export function nextStep(here, counts, shots, plan) {
   const missing = [];
   plan.rings.forEach((ring, r) => counts[r].forEach((count, s) => { if (count < ring.target) missing.push([r, s]); }));
   if (!missing.length) return { kind: 'done', text: 'All angles covered. Tap Finish.', arrow: null };
-  if (!here) return { kind: 'manual', text: 'Motion sensors unavailable. Use Capture now and cover every side.', arrow: null };
+  if (!here) return { kind: 'manual', text: 'Motion sensors unavailable. Use the shutter button and cover every side.', arrow: null };
   const ring = ringOf(here.pitch, plan), sector = sectorOf(here.azimuth, plan);
   if (ring === null) {
     return here.pitch < plan.rings[0].min
@@ -93,10 +93,10 @@ export function exposureProblem(luma) {
   return null;
 }
 
-// Top-down checklist map: object in the centre, outer ring = low angle, inner ring = high angle.
+// Top-down checklist dial: object in the centre (room for a progress label), outer ring = low angle, inner = high.
 // Sector 0 (where the scan started) is at the bottom; walking left moves you clockwise on screen.
 export function drawCoverage(ctx, size, plan, counts, here = null, target = null) {
-  const c = size / 2, outer = size * 0.46, band = outer / (plan.rings.length + 0.6), width = 2 * Math.PI / plan.sectors;
+  const c = size / 2, outer = size * 0.46, band = outer / (plan.rings.length + 1.5), width = 2 * Math.PI / plan.sectors;
   ctx.clearRect(0, 0, size, size);
   plan.rings.forEach((ring, r) => counts[r].forEach((count, s) => {
     const start = (s * 360 / plan.sectors + 90) * RAD - width / 2;

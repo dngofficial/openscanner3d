@@ -13,11 +13,13 @@ from pathlib import Path
 import re
 import sys
 import threading
+import time
 import uuid
 import zipfile
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 import uvicorn
 
@@ -33,10 +35,13 @@ SCAN_ID = r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}"
 PHOTO = r"kf_[0-9]{4}\.jpg"
 MIN_PHOTOS = 12
 PAGES = {"/": "index.html", "/phone": "phone.html"}
-MODULES = {"guidance.mjs"}
-DOWNLOADS = {"scan.zip", "object.glb", "object.obj", "mesh.glb", "mesh.obj", "colmap.log"}
+MODULES = {"guidance.mjs", "viewer.mjs"}
+DOWNLOADS = {"scan.zip", "object.glb", "object_hires.glb", "object.obj", "object.mtl", "object_albedo.png",
+             "mesh.glb", "mesh.obj", "colmap.log"}
 _write_lock = threading.Lock()
 app = FastAPI()
+app.mount("/vendor", StaticFiles(directory=BASE / "frontend" / "vendor"), name="vendor")  # Three.js, served locally.
+phone_seen = 0.0  # monotonic time of the last request from a phone holding the key
 
 
 # ---- access control ------------------------------------------------------
@@ -60,6 +65,8 @@ async def guard(request: Request, call_next):
             return response
         if not network.key_matches(request.cookies.get(network.COOKIE)):
             return PlainTextResponse("Open the link or scan the QR code shown on the laptop's scanner page.", status_code=401)
+        global phone_seen
+        phone_seen = time.monotonic()
     return await call_next(request)
 
 
@@ -104,7 +111,8 @@ def connect(request: Request):
     if urls and SETTINGS.lan and project_path(SETTINGS.tls_cert).is_file():  # Never show a link that cannot work.
         import segno
         svg = segno.make(urls[0], error="m").svg_inline(scale=6, border=2, dark="#000", light="#fff")
-    return dict(lan=SETTINGS.lan, urls=urls, qr_svg=svg, problems=problems, mode=SETTINGS.mode)
+    seen = round(time.monotonic() - phone_seen) if phone_seen else None
+    return dict(lan=SETTINGS.lan, urls=urls, qr_svg=svg, problems=problems, mode=SETTINGS.mode, phone_seen_seconds=seen)
 
 
 # ---- scans ---------------------------------------------------------------

@@ -10,6 +10,7 @@ from .silhouette import reconstruct_object
 
 _heavy_job = threading.Lock()
 REQUIRED_FLAGS = ("--workspace_path", "--image_path", "--quality", "--single_camera", "--mesher")
+OBJECT_FILES = ("object.glb", "object_hires.glb", "object.obj", "object.mtl", "object_albedo.png")
 
 
 def colmap_help(executable: str) -> str:
@@ -76,17 +77,25 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         for extension in ("obj", "glb"):
             os.replace(workspace / f"mesh.{extension}", output / f"mesh.{extension}")
         message = "Scene mesh exported (COLMAP dense + Poisson)."
+        for name in OBJECT_FILES:
+            (output / name).unlink(missing_ok=True)
         try:
             # Plain objects give dense stereo little to work with; their outlines still define the shape.
             info = reconstruct_object(workspace, images, workspace)
-            for extension in ("obj", "glb"):
-                os.replace(workspace / f"object.{extension}", output / f"object.{extension}")
-            message += (f" Object from {info['photos']} outlines: object.glb ({info['faces']} faces, vertex colours)."
+            for name in OBJECT_FILES:
+                if (workspace / name).is_file():
+                    os.replace(workspace / name, output / name)
+            message += (f" Object from {info['photos']} outlines: object_hires.glb ({info['faces']} faces, vertex colours)."
                         + (" It touches the search box edge, so part may be cut off." if info["clipped"] else ""))
-            return dict(msg=message, lvl="warn" if info["clipped"] else "ok", done=True, model_ready=True, object=info)
+            if info.get("game_asset"):
+                message += f" Game asset: object.glb ({info['game_asset']['triangles']} triangles, photo-baked texture)."
+            if info.get("warnings"):
+                message += " " + " ".join(info["warnings"])
+            return dict(msg=message, lvl="warn" if info["clipped"] or info.get("warnings") else "ok",
+                        done=True, model_ready=True, object=info)
         except (ValueError, OSError, np.linalg.LinAlgError) as error:
-            for extension in ("obj", "glb"):
-                (output / f"object.{extension}").unlink(missing_ok=True)  # Never pair a new scene with an old object.
+            for name in OBJECT_FILES:
+                (output / name).unlink(missing_ok=True)  # Never pair a new scene with an old object.
             return dict(msg=f"{message} Object reconstruction failed: {error}.", lvl="warn", done=True, model_ready=True)
     except subprocess.TimeoutExpired:
         return dict(msg="Reconstruction timed out; its process tree was stopped. Photos remain available.", lvl="bad", done=False)

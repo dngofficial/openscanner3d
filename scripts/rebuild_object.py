@@ -26,6 +26,9 @@ def main() -> int:
     parser.add_argument("--workspace", type=Path, help="COLMAP workspace (contains sparse/0 and dense/0).")
     parser.add_argument("--images", type=Path, help="Folder of the photos COLMAP used.")
     parser.add_argument("--output", type=Path, help="Where to write object.glb and object.obj.")
+    parser.add_argument("--target-triangles", type=int, default=5000)
+    parser.add_argument("--texture-size", type=int, default=2048)
+    parser.add_argument("--height-cm", type=float, help="Known object height in cm; export uses metres. Otherwise arbitrary scale.")
     args = parser.parse_args()
     workspace = args.workspace or (newest_run(args.scan) if args.scan else None)
     images = args.images or (args.scan / "images" if args.scan else None)
@@ -36,12 +39,15 @@ def main() -> int:
         parser.error("Photo folder not found. Pass --images.")
     started = time.monotonic()
     try:
-        info = reconstruct_object(workspace, images, output)
+        info = reconstruct_object(workspace, images, output, target_triangles=args.target_triangles,
+                                  texture_size=args.texture_size, height_cm=args.height_cm)
     except (ValueError, OSError) as error:
         print(f"Object reconstruction failed: {error}", file=sys.stderr)
         return 1
     info["seconds"] = round(time.monotonic() - started, 1)
-    info["written"] = [str(output / "object.glb"), str(output / "object.obj")]
+    info["written"] = [str(output / name) for name in
+                       ("object.glb", "object_hires.glb", "object.obj", "object.mtl", "object_albedo.png")
+                       if (output / name).is_file()]
     print(json.dumps(info, indent=2))
     return 0
 

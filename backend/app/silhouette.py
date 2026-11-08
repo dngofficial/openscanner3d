@@ -20,6 +20,7 @@ outer bound of the shape, not a measurement.
 """
 from pathlib import Path
 import struct
+import time
 
 import cv2
 import numpy as np
@@ -292,8 +293,14 @@ def y_up(mesh):
     return out
 
 
-def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object", masks_dir: Path | None = None) -> dict:
-    """Silhouette reconstruction for a finished COLMAP workspace; writes <stem>.glb and <stem>.obj."""
+def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object", masks_dir: Path | None = None,
+                       target_triangles=5000, texture_size=2048, height_cm=None) -> dict:
+    """Export a photo-textured game asset and a separate vertex-coloured high-resolution mesh."""
+    from .game_asset import asset_frame, build_game_asset
+    started = time.monotonic()
+    if height_cm is not None and (not np.isfinite(height_cm) or height_cm <= 0):
+        raise ValueError("height_cm must be positive and finite")
+    output.mkdir(parents=True, exist_ok=True)
     sparse, dense = workspace / "sparse" / "0", workspace / "dense" / "0"
     cameras, model_images = read_cameras(sparse / "cameras.bin"), read_images(sparse / "images.bin")
     if len(model_images) < 6:
@@ -325,10 +332,29 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     volume, score, extent = carve(scene, masks)
     mesh = mesh_volume(score, extent)
     coloured = colour(mesh, scene, photos, masks)
-    mesh.apply_translation([0, 0, -mesh.bounds[0, 2]])  # Stand it on z = 0.
-    export = y_up(mesh)
-    for extension in ("glb", "obj"):
-        export.export(output / f"{stem}.{extension}")
+    # Keep the original mesh frame for camera projection. Transform only export copies.
+    export = asset_frame(mesh, height_cm)
+    export.export(output / f"{stem}_hires.glb")
+    hires_seconds = time.monotonic() - started
+    game_files = [f"{stem}{suffix}" for suffix in (".glb", ".obj", ".mtl", "_albedo.png")]
+    for name in game_files:
+        (output / name).unlink(missing_ok=True)
+    warnings = []
+    game = None
+    game_started = time.monotonic()
+    try:
+        game = build_game_asset(mesh, scene, photos, masks, output, stem,
+                                target_triangles, texture_size, height_cm)
+        warnings.extend(game["warnings"])
+    except Exception as error:
+        for name in game_files:
+            (output / name).unlink(missing_ok=True)
+        warnings.append(f"Game asset failed; {stem}_hires.glb retained: {type(error).__name__}: {error}")
     touching = bool(volume[[0, -1]].any() or volume[:, [0, -1]].any() or volume[:, :, -1].any())
     return dict(faces=int(len(mesh.faces)), photos=len(model_images), masks=source, coloured_fraction=round(coloured, 3),
-                size_relative_to_orbit=[round(float(v), 3) for v in mesh.extents / scene.orbit], clipped=touching)
+                size_relative_to_orbit=[round(float(v), 3) for v in mesh.extents / scene.orbit], clipped=touching,
+                hires=dict(triangles=len(mesh.faces), texture_size=None, coverage=round(coloured, 4),
+                           seconds=round(hires_seconds, 2)), game_asset=game,
+                game_asset_seconds=round(time.monotonic() - game_started, 2), warnings=warnings,
+                scale="arbitrary" if height_cm is None else "user-supplied height in metres",
+                height_cm=height_cm)

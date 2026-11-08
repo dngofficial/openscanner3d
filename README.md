@@ -59,14 +59,26 @@ The angles come from the phone's motion sensors and assume you keep the object c
 
 `https://localhost:8443` (or `http://localhost:8000` without LAN mode) shows:
 
-- **Connect your phone:** a QR code with the phone link and this launch's key, or the exact problem stopping the connection (LAN off, no certificate, address changed, not on Wi-Fi).
-- **Scans:** for each scan, the checklist map, photo count, angles covered, thumbnails, `scan.zip` (photos, `poses.json`, `scan.json`) and, in reconstruct mode, **Reconstruct**.
+- **Status bar:** capture or reconstruct mode, and whether a phone is connected (with when it was last seen).
+- **Connect a phone:** a QR code with the phone link and this launch's key, or the exact problem stopping the connection (LAN off, no certificate, address changed, not on Wi-Fi). It shrinks once a phone is connected.
+- **Scans:** a list with each scan's angle dial, photo count, coverage and state (capturing, ready to reconstruct, reconstructing, model ready, failed). It updates live while the phone captures.
+- **Scan detail:**
+  - the next action (Reconstruct, Retry or Reconstruct again) and the latest status message;
+  - a **3D viewer** for the object and the whole scene: drag to orbit, scroll to zoom, with wireframe, turntable and reset-view controls, plus the triangle count and colour type. It uses Three.js vendored in `frontend/vendor`, so it works offline;
+  - key facts, labelled downloads and all photos.
 
 ### Reconstruction (GPU laptop)
 
 Set `mode = "reconstruct"` and the `colmap` path in `config.local.toml` (COLMAP Windows **CUDA** build). Then press **Reconstruct** on a finished scan. It runs in the background; the scan shows `running`, then `ready` or `failed`, and offers these files:
 
-- **`object.glb` / `object.obj`: the scanned object.** Built from its outlines (silhouette carving, or "visual hull") using COLMAP's camera positions, so it works on plain objects that dense stereo can't see, such as a matte black bottle. It stands upright on the ground plane, centred, with colours sampled from the photos.
+- **`object.glb` (plus `object.obj` / `object.mtl` / `object_albedo.png`): the scanned object as a game asset.** It is built from the object's outlines (silhouette carving, or "visual hull") using COLMAP's camera positions, so it works on plain objects that dense stereo can't see, such as a matte black bottle. It is then:
+  - reduced to 5,000 triangles;
+  - UV-unwrapped (xatlas);
+  - given a 2048 px colour texture baked directly from the photos;
+  - exported as a single material, upright, with its origin at the base centre.
+- **`object_hires.glb`: the same object at full detail** (about 70k triangles, vertex colours).
+
+On the first real scan, the game asset had 5,000 triangles, was watertight, got photo colour on 90% of its surface (the rest is filled from neighbouring texture), and the bottle's printed logo is legible in the texture. Change the defaults with `scripts.rebuild_object --target-triangles N --texture-size N`. Add `--height-cm N` to scale the model to a height you measured yourself; otherwise the scale is arbitrary.
 - **`mesh.glb` / `mesh.obj`: the whole scene** from COLMAP dense stereo and Poisson meshing, usually dominated by the table.
 - **`colmap.log`.**
 

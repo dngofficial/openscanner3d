@@ -3,93 +3,156 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#101215">
-<title>Scan with phone</title>
+<meta name="theme-color" content="#0f1114">
+<title>OpenScanner 3D · Scan</title>
 <style>
-  :root { --bg:#101215; --panel:rgba(16,18,21,.86); --ink:#f1ede4; --dim:#a2a5a8; --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; }
-  * { box-sizing:border-box; }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink); font:16px/1.35 system-ui, sans-serif; overflow:hidden; }
+  :root { --bg:#0f1114; --panel:rgba(15,17,20,.82); --solid:#1b1e23; --line:#3b4047; --ink:#f3efe6; --dim:#a7aaad;
+          --ok:#3fb8a0; --warn:#e3a53c; --bad:#e2604c; --radius:14px; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink); font:16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow:hidden; }
   video { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
-  .layer { position:fixed; inset:0; display:flex; flex-direction:column; justify-content:space-between; pointer-events:none;
-           padding:max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
-  .layer > * { pointer-events:auto; }
-  #alert { background:var(--panel); border-left:8px solid var(--dim); border-radius:8px; padding:14px 16px; font-size:20px; font-weight:650; min-height:64px; }
-  #alert.ok { border-color:var(--ok); } #alert.warn { border-color:var(--warn); } #alert.bad { border-color:var(--bad); }
-  #target { position:fixed; left:50%; top:50%; width:62vmin; height:62vmin; transform:translate(-50%,-50%); border:3px dashed rgba(255,255,255,.75);
-            border-radius:50%; pointer-events:none; }
-  #target span { position:absolute; left:50%; top:100%; transform:translate(-50%, 8px); white-space:nowrap; font-size:14px; font-weight:600;
-                 color:#fff; text-shadow:0 0 6px #000; }
-  #arrow { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); font-size:22vmin; line-height:1; color:#fff;
-           text-shadow:0 0 12px #000; pointer-events:none; }
-  #flash { position:fixed; inset:0; border:10px solid var(--ok); opacity:0; transition:opacity .4s; pointer-events:none; }
-  #flash.on { opacity:1; transition:none; }
-  .bottom { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:end; }
-  #map { width:34vmin; height:34vmin; max-width:170px; max-height:170px; background:var(--panel); border-radius:50%; }
-  .controls { display:flex; flex-direction:column; gap:8px; background:var(--panel); border-radius:10px; padding:10px; }
-  #count { font-size:22px; font-weight:700; } #count small { color:var(--dim); font-weight:400; font-size:14px; }
-  .row { display:flex; gap:8px; } .row button { flex:1; }
-  button { font:inherit; font-weight:600; color:var(--ink); background:#2a2e34; border:1px solid #4a4f57; border-radius:8px; padding:12px 10px; }
-  button.go { background:var(--ok); border-color:var(--ok); color:#06201b; }
-  button:disabled { opacity:.45; }
-  .sheet { position:fixed; inset:0; background:var(--bg); overflow:auto; padding:24px 20px max(24px, env(safe-area-inset-bottom)); }
-  .sheet h1 { font-size:24px; margin:0 0 12px; } .sheet p, .sheet li { color:#d6d2c9; } .sheet button { width:100%; margin-top:12px; padding:16px; font-size:18px; }
-  #reference { width:100%; max-height:40vh; object-fit:contain; border-radius:8px; background:#000; }
-  .sheet h2 { font-size:18px; margin:28px 0 6px; }
-  .upload { display:block; margin-top:12px; padding:16px; text-align:center; font-weight:600; border:1px solid #4a4f57; border-radius:8px; background:#2a2e34; }
-  .upload input { position:absolute; opacity:0; width:1px; height:1px; }
+  button { font:inherit; font-weight:650; color:var(--ink); background:#2a2e34; border:1px solid #4c5159; border-radius:12px;
+           padding:12px 14px; min-height:48px; cursor:pointer; }
+  button.go { background:var(--ok); border-color:var(--ok); color:#05201a; }
+  button:disabled { opacity:.4; }
   [hidden] { display:none !important; }
+
+  /* ---- scanning HUD ---- */
+  .hud { position:fixed; inset:0; pointer-events:none; }
+  .hud > * { pointer-events:auto; }
+  .top { position:absolute; left:12px; right:12px; top:max(12px, env(safe-area-inset-top)); }
+  #instruction { background:var(--panel); backdrop-filter:blur(8px); border-radius:var(--radius); padding:14px 16px;
+                 font-size:20px; font-weight:700; line-height:1.25; border-left:7px solid var(--dim); }
+  #instruction.ok { border-color:var(--ok); } #instruction.warn { border-color:var(--warn); } #instruction.bad { border-color:var(--bad); }
+  .chips { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .chip { font-size:13px; font-weight:650; padding:4px 10px; border-radius:999px; background:var(--panel); border:1px solid var(--line); }
+  .chip::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--dim); vertical-align:1px; }
+  .chip.ok::before { background:var(--ok); } .chip.warn::before { background:var(--warn); } .chip.bad::before { background:var(--bad); }
+  #target { position:absolute; left:50%; top:46%; width:62vmin; height:62vmin; transform:translate(-50%,-50%);
+            border:3px dashed rgba(255,255,255,.7); border-radius:50%; pointer-events:none; }
+  #target span { position:absolute; left:50%; top:100%; transform:translate(-50%, 8px); white-space:nowrap; font-size:13px;
+                 font-weight:650; color:#fff; text-shadow:0 0 6px #000; }
+  /* Direction cues sit at the screen edges so they never cover the object. */
+  .cue { position:absolute; display:grid; place-items:center; width:64px; height:64px; border-radius:50%;
+         background:rgba(15,17,20,.7); border:2px solid #fff; color:#fff; font-size:34px; font-weight:800; pointer-events:none; }
+  .cue.left { left:10px; top:46%; transform:translateY(-50%); } .cue.right { right:10px; top:46%; transform:translateY(-50%); }
+  .cue.up { left:50%; top:calc(46% - 31vmin - 74px); transform:translateX(-50%); }
+  .cue.down { left:50%; top:calc(46% + 31vmin + 34px); transform:translateX(-50%); }
+  @media (prefers-reduced-motion:no-preference) { .cue { animation:nudge 1s ease-in-out infinite; } }
+  @keyframes nudge { 50% { opacity:.55; } }
+  #flash { position:fixed; inset:0; border:10px solid var(--ok); opacity:0; transition:opacity .45s; pointer-events:none; }
+  #flash.on { opacity:1; transition:none; }
+  .bottom { position:absolute; left:10px; right:10px; bottom:max(10px, env(safe-area-inset-bottom)); display:grid;
+            grid-template-columns:auto 1fr; grid-template-areas:"dial info" "bar bar"; gap:10px; align-items:end; }
+  .bottom .dial { grid-area:dial; } .bottom .panel { grid-area:info; } .bottom .bar { grid-area:bar; }
+  .dial { position:relative; width:min(34vw, 170px); aspect-ratio:1; background:var(--panel); border-radius:50%; }
+  .dial canvas { width:100%; height:100%; display:block; }
+  .dial strong { position:absolute; inset:0; display:grid; place-items:center; font-size:clamp(16px, 5vw, 22px); }
+  .panel { background:var(--panel); backdrop-filter:blur(8px); border-radius:var(--radius); padding:10px; display:grid; gap:8px; }
+  #rings { font-size:13px; color:var(--dim); }
+  .bar { background:var(--panel); backdrop-filter:blur(8px); border-radius:var(--radius); padding:8px 10px;
+         display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px; }
+  .bar .left, .bar .right { display:flex; gap:8px; align-items:center; } .bar .right { justify-content:flex-end; }
+  #lastShot { width:52px; height:52px; border-radius:10px; object-fit:cover; background:#000; border:2px solid var(--line); padding:0; }
+  #shutter { width:66px; height:66px; border-radius:50%; padding:0; background:#fff; border:5px solid #b9bcc0; flex:none; }
+  #shutter:active { transform:scale(.94); }
+  .toggle { font-size:14px; padding:10px 12px; white-space:nowrap; }
+  .toggle[aria-pressed="false"] { opacity:.6; }
+  #finish { width:100%; }
+
+  /* ---- sheets ---- */
+  .sheet { position:fixed; inset:0; background:var(--bg); overflow:auto; padding:max(28px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); }
+  .sheet h1 { font-size:26px; margin:0 0 6px; } .sheet p { color:#d8d4cb; margin:6px 0; }
+  .steps { list-style:none; padding:0; margin:20px 0; display:grid; gap:12px; }
+  .steps li { display:grid; grid-template-columns:44px 1fr; gap:12px; align-items:center; background:var(--solid); border-radius:var(--radius); padding:12px; }
+  .steps svg { width:44px; height:44px; }
+  .steps b { display:block; } .steps span { color:var(--dim); font-size:14px; }
+  .sheet > button { width:100%; margin-top:10px; padding:16px; font-size:18px; }
+  details { margin-top:22px; background:var(--solid); border-radius:var(--radius); padding:12px 14px; }
+  summary { font-weight:650; cursor:pointer; min-height:28px; }
+  .upload { display:block; margin-top:10px; padding:14px; text-align:center; font-weight:650; border:1px solid #4c5159; border-radius:12px; background:#2a2e34; }
+  .upload input { position:absolute; opacity:0; width:1px; height:1px; }
+  #introError { color:var(--bad); font-weight:600; }
+  #reference { width:100%; max-height:42vh; object-fit:contain; border-radius:12px; background:#000; }
+  .summary { display:grid; place-items:center; gap:10px; margin:24px 0; }
+  .summary .dial { width:200px; background:var(--solid); }
 </style>
 </head>
 <body>
 <video id="video" playsinline muted autoplay></video>
-<div id="target" hidden><span>Fill this circle with the object</span></div>
-<div id="arrow" aria-hidden="true"></div>
 <div id="flash"></div>
-<div class="layer" id="hud" hidden>
-  <div id="alert" role="status" aria-live="polite">Starting…</div>
+
+<div class="hud" id="hud" hidden>
+  <div class="top">
+    <div id="instruction" role="status" aria-live="polite">Starting…</div>
+    <div class="chips" aria-label="Capture conditions">
+      <span class="chip" id="chipLight">Light</span>
+      <span class="chip" id="chipSteady">Steady</span>
+      <span class="chip" id="chipAngles">Angles</span>
+    </div>
+  </div>
+  <div id="target"><span>Fill this circle with the object</span></div>
+  <div class="cue left" id="cueLeft" hidden aria-hidden="true">‹</div>
+  <div class="cue right" id="cueRight" hidden aria-hidden="true">›</div>
+  <div class="cue up" id="cueUp" hidden aria-hidden="true">⌃</div>
+  <div class="cue down" id="cueDown" hidden aria-hidden="true">⌄</div>
   <div class="bottom">
-    <canvas id="map" width="340" height="340" aria-label="Angle checklist: outer ring low, inner ring high; your position is the white dot"></canvas>
-    <div class="controls">
-      <div id="count">0 <small>/ 36 angles</small></div>
-      <div class="row"><button id="captureNow">Capture now</button><button id="undo">Undo</button></div>
-      <button id="finish" class="go">Finish</button>
+    <div class="dial" aria-label="Angle checklist. Outer ring low, inner ring high; the white dot is you.">
+      <canvas id="map" width="380" height="380"></canvas>
+      <strong id="percent">0%</strong>
+    </div>
+    <div class="panel">
+      <div id="rings">Low 0/12 · Mid 0/12 · High 0/12</div>
+      <button id="finish" disabled>Finish · 0 photos</button>
+    </div>
+    <div class="bar">
+      <div class="left"><button id="lastShot" aria-label="Last photo; tap to delete it" disabled></button>
+        <button id="auto" class="toggle" aria-pressed="true">Auto on</button></div>
+      <button id="shutter" aria-label="Take a photo now"></button>
+      <div class="right"><button id="sound" class="toggle" aria-pressed="true" aria-label="Sound">🔊</button></div>
     </div>
   </div>
 </div>
 
 <section class="sheet" id="intro">
   <h1>Guided scan</h1>
-  <ol>
-    <li>Put the object on a table with space to walk around it. It must not move during the scan.</li>
-    <li>Stand at the side you want as the front and point the phone at the object.</li>
-    <li>Tap <strong>Start</strong> and allow the camera and motion access.</li>
-    <li>Stand close enough that the object <strong>fills the dashed circle</strong>, and keep it centred. A small object far away gives the laptop too few pixels to reconstruct.</li>
-    <li>Follow the instructions at the top; photos are taken automatically when you reach a missing angle and hold still.</li>
+  <p>Walk around the object once or twice; the phone tells you which angles are still missing and takes the photos.</p>
+  <ol class="steps">
+    <li><svg viewBox="0 0 44 44" aria-hidden="true"><rect x="6" y="28" width="32" height="5" rx="2" fill="#5b6067"/><rect x="17" y="10" width="10" height="18" rx="3" fill="#3fb8a0"/></svg>
+      <div><b>Place it on a table you can walk around</b><span>Plain, contrasting surface. It must not move.</span></div></li>
+    <li><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="5 4"/><rect x="16" y="11" width="12" height="22" rx="3" fill="#3fb8a0"/></svg>
+      <div><b>Fill the circle with the object</b><span>Stand close and keep it centred.</span></div></li>
+    <li><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="16" fill="none" stroke="#3a3f46" stroke-width="7"/><path d="M22 6a16 16 0 0 1 16 16" fill="none" stroke="#3fb8a0" stroke-width="7"/></svg>
+      <div><b>Fill the dial at three heights</b><span>Low, middle and from above. Photos are taken when you hold still.</span></div></li>
   </ol>
-  <p>Keep the phone the same way up (portrait or landscape) for the whole scan.</p>
-  <button id="start" class="go">Start</button>
+  <button id="start" class="go">Start scanning</button>
   <div id="resumeBox" hidden>
-    <p>An unfinished scan exists on the laptop.</p>
+    <p>An unfinished scan is waiting on the laptop.</p>
     <button id="resume">Continue that scan</button>
   </div>
   <p id="introError" role="alert"></p>
-  <h2>No live camera?</h2>
-  <p>If the camera or motion access is blocked or unsupported, take 36–48 photos with the phone's camera app instead, walking all the way around the object at two or three heights, then upload them. These photos get quality checks but no angle guidance.</p>
-  <label class="upload">Upload photos <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
-  <p id="uploadStatus" role="status"></p>
+  <details>
+    <summary>No live camera? Upload photos instead</summary>
+    <p>Take 36–48 photos with the camera app, walking all the way round at two or three heights, then upload them. They are quality-checked but get no angle guidance.</p>
+    <label class="upload">Choose photos <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+    <p id="uploadStatus" role="status"></p>
+  </details>
 </section>
 
 <section class="sheet" id="realign" hidden>
   <h1>Line up with the first photo</h1>
-  <p>Stand where this first photo was taken, point at the object the same way, then tap <strong>Re-align</strong>. Angles are measured from this position.</p>
+  <p>Stand where this first photo was taken and point at the object the same way, then tap Re-align. Angles are measured from this position.</p>
   <img id="reference" alt="First photo of this scan">
   <button id="realignNow" class="go">Re-align</button>
 </section>
 
 <section class="sheet" id="done" hidden>
   <h1>Scan saved</h1>
-  <p id="doneText"></p>
-  <p>Process or download it from the scanner page on the laptop.</p>
+  <div class="summary">
+    <div class="dial"><canvas id="doneMap" width="400" height="400"></canvas><strong id="donePercent"></strong></div>
+    <p id="doneText"></p>
+  </div>
+  <p>Open the scanner page on the laptop to reconstruct and preview the 3D model.</p>
   <button id="again">Start another scan</button>
 </section>
 
@@ -101,21 +164,35 @@ probe.width = 48; probe.height = 36;
 const probeContext = probe.getContext('2d', { willReadFrequently: true });
 let plan, scanId = null, counts, shots = {}, order = [], heading0 = null, orientation = null, motion = [], motionSeen = false;
 let stream = null, inFlight = false, lastCapture = 0, sticky = null, audio = null, wakeLock = null, ticks = 0, exposure = null, loop = null;
+let photos = 0, autoCapture = true, soundOn = localStorage.getItem('scanner-sound') !== 'off';
 const STORE = 'scanner-current-scan';
+const MIN_PHOTOS = 12;
 
-function say(text, level = 'warn') { $('alert').textContent = text; $('alert').className = level; }
+function say(text, level = 'warn') { $('instruction').textContent = text; $('instruction').className = level; }
 function stickyAlert(text, level, ms = 2600) { sticky = { text, level, until: performance.now() + ms }; say(text, level); }
+function chip(id, label, level) { const el = $(id); el.textContent = label; el.className = `chip ${level}`; }
 function beep(frequency, ms) {
-  if (!audio) return;
+  if (!audio || !soundOn) return;
   const oscillator = audio.createOscillator(), gain = audio.createGain();
   oscillator.frequency.value = frequency; gain.gain.value = 0.08;
   oscillator.connect(gain).connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + ms / 1000);
 }
-function buzz(pattern) { navigator.vibrate?.(pattern); }
+function buzz(pattern) { try { navigator.vibrate?.(pattern); } catch { /* not supported */ } }
 const emptyCounts = () => plan.rings.map(() => new Array(plan.sectors).fill(0));
 const totalWanted = () => plan.rings.reduce((sum, ring) => sum + ring.target * plan.sectors, 0);
-function showCount(coverage) {
-  $('count').innerHTML = `${coverage ? coverage.have : 0} <small>/ ${totalWanted()} angles</small>`;
+function progress() {
+  // Per height: sides that have all the photos they need.
+  const done = plan.rings.map((ring, r) => counts[r].filter(count => count >= ring.target).length);
+  const have = plan.rings.reduce((sum, ring, r) => sum + counts[r].reduce((s, c) => s + Math.min(c, ring.target), 0), 0);
+  return { done, percent: Math.round(100 * have / totalWanted()) };
+}
+function showProgress() {
+  const { done, percent } = progress();
+  $('percent').textContent = `${percent}%`;
+  $('rings').textContent = plan.rings.map((ring, r) => `${ring.name[0].toUpperCase()}${ring.name.slice(1)} ${done[r]}/${plan.sectors}`).join(' · ');
+  $('finish').disabled = photos < MIN_PHOTOS;
+  $('finish').className = percent >= 100 ? 'go' : '';
+  $('finish').textContent = photos < MIN_PHOTOS ? `Finish · ${photos}/${MIN_PHOTOS} photos minimum` : `Finish · ${photos} photos`;
 }
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -170,21 +247,20 @@ async function begin(resumeId) {
     plan = await api('/api/plan');
     if (resumeId) {
       const scan = await api(`/api/scans/${resumeId}`);
-      scanId = scan.id; counts = scan.coverage.counts; order = [];
+      scanId = scan.id; counts = scan.coverage.counts; order = []; photos = scan.photos.length;
       for (const photo of scan.photos) {
         if (photo.ring === null) continue;
         const key = `${photo.ring}:${photo.sector}`;
         (shots[key] ||= []).push({ azimuth: photo.azimuth, pitch: photo.pitch }); order.push(key);
       }
-      showCount(scan.coverage);
       if (scan.photos.length) {
+        setLastShot(scan.photos.at(-1).name);
         $('reference').src = `/scans/${scanId}/images/${scan.photos[0].name}`;
         $('intro').hidden = true; $('realign').hidden = false;
         return;
       }
     } else {
-      scanId = (await api('/api/scans', { method: 'POST' })).id; counts = emptyCounts(); shots = {}; order = [];
-      showCount(null);
+      scanId = (await api('/api/scans', { method: 'POST' })).id; counts = emptyCounts(); shots = {}; order = []; photos = 0;
     }
     localStorage.setItem(STORE, scanId);
     startScanning();
@@ -196,8 +272,9 @@ async function begin(resumeId) {
 }
 
 function startScanning() {
-  $('intro').hidden = true; $('realign').hidden = true; $('hud').hidden = false; $('target').hidden = false;
+  $('intro').hidden = true; $('realign').hidden = true; $('hud').hidden = false;
   heading0 = headingNow();  // If the sensors have not reported yet, the first reading in tick() sets it.
+  showProgress();
   clearInterval(loop);
   loop = setInterval(tick, 150);
 }
@@ -210,20 +287,34 @@ function checkExposure() {
   return exposureProblem(luma);
 }
 
+function showCue(arrow) {
+  const cues = { left: ['cueLeft'], right: ['cueRight'], up: ['cueUp'], down: ['cueDown'], sideways: ['cueLeft', 'cueRight'] };
+  for (const id of ['cueLeft', 'cueRight', 'cueUp', 'cueDown']) $(id).hidden = !(cues[arrow] || []).includes(id);
+}
+
 function tick() {
   if (heading0 === null && orientation) heading0 = headingNow();
   const now = performance.now(), position = here();
   if (++ticks % 3 === 0) exposure = checkExposure();
   const step = nextStep(position, counts, shots, plan);
-  $('arrow').textContent = { left: '⟵', right: '⟶', up: '⤒', down: '⤓', sideways: '⟷' }[step.arrow] || '';
-  drawCoverage(map, 340, plan, counts, position, step.target || (step.kind === 'hold' ? { ring: step.ring, sector: step.sector } : null));
+  const steady = !motionSeen || isSteady(motion, now);
+  chip('chipLight', exposure ? 'Light' : 'Light OK', exposure ? 'bad' : 'ok');
+  chip('chipSteady', !motionSeen ? 'Steady' : steady ? 'Steady' : 'Moving', !motionSeen ? '' : steady ? 'ok' : 'warn');
+  chip('chipAngles', position ? 'Angles tracked' : 'No motion sensors', position ? 'ok' : 'warn');
+  showCue(step.arrow);
+  drawCoverage(map, 380, plan, counts, position, step.target || (step.kind === 'hold' ? { ring: step.ring, sector: step.sector } : null));
   if (sticky && now < sticky.until) { /* keep showing the last result */ }
   else if (exposure) say(exposure, 'bad');
   else if (inFlight) say('Saving photo…', 'ok');
+  else if (step.kind === 'hold' && !autoCapture) say('Good angle. Tap the shutter (auto-capture is off).', 'ok');
+  else if (step.kind === 'hold' && !steady) say('Hold still…', 'warn');
   else say(step.text, step.kind === 'hold' || step.kind === 'done' ? 'ok' : 'warn');
-  const steady = !motionSeen || isSteady(motion, now);
-  if (step.kind === 'hold' && !steady && !(sticky && now < sticky.until)) say('Hold still…', 'warn');
-  if (step.kind === 'hold' && steady && !exposure && !inFlight && now - lastCapture > 900) capture(position);
+  if (autoCapture && step.kind === 'hold' && steady && !exposure && !inFlight && now - lastCapture > 900) capture(position);
+}
+
+function setLastShot(name) {
+  $('lastShot').style.background = `#000 center / cover url("/scans/${scanId}/images/${name}")`;
+  $('lastShot').disabled = false;
 }
 
 async function capture(position) {
@@ -237,7 +328,7 @@ async function capture(position) {
     const query = position ? `?azimuth=${position.azimuth.toFixed(1)}&pitch=${position.pitch.toFixed(1)}` : '';
     const result = await api(`/api/scans/${scanId}/photos${query}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
     if (result.accepted) {
-      counts = result.coverage.counts; showCount(result.coverage);
+      counts = result.coverage.counts; photos += 1; showProgress(); setLastShot(result.name);
       if (result.ring !== null) { const key = `${result.ring}:${result.sector}`; (shots[key] ||= []).push(position); order.push(key); }
       else order.push(null);
       $('flash').classList.add('on'); setTimeout(() => $('flash').classList.remove('on'), 60);
@@ -257,13 +348,27 @@ async function capture(position) {
 $('start').onclick = () => begin(null);
 $('resume').onclick = () => begin(localStorage.getItem(STORE));
 $('realignNow').onclick = () => startScanning();
-$('captureNow').onclick = () => capture(here());
-$('undo').onclick = async () => {
+$('shutter').onclick = () => capture(here());
+$('auto').onclick = () => {
+  autoCapture = !autoCapture;
+  $('auto').setAttribute('aria-pressed', String(autoCapture)); $('auto').textContent = autoCapture ? 'Auto on' : 'Auto off';
+};
+$('sound').setAttribute('aria-pressed', String(soundOn)); $('sound').textContent = soundOn ? '🔊' : '🔇';
+$('sound').onclick = () => {
+  soundOn = !soundOn;
+  try { localStorage.setItem('scanner-sound', soundOn ? 'on' : 'off'); } catch { /* storage blocked */ }
+  $('sound').setAttribute('aria-pressed', String(soundOn)); $('sound').textContent = soundOn ? '🔊' : '🔇';
+};
+$('lastShot').onclick = async () => {
+  if (!confirm('Delete the last photo?')) return;
   try {
     const result = await api(`/api/scans/${scanId}/photos/last`, { method: 'DELETE' });
     const key = order.pop();
     if (key) shots[key]?.pop();
-    counts = result.coverage.counts; showCount(result.coverage);
+    counts = result.coverage.counts; photos -= 1; showProgress();
+    const scan = await api(`/api/scans/${scanId}`);
+    if (scan.photos.length) setLastShot(scan.photos.at(-1).name);
+    else { $('lastShot').style.background = ''; $('lastShot').disabled = true; }
     stickyAlert(`Removed ${result.removed}.`, 'warn', 1200);
   } catch (error) { stickyAlert(error.message, 'bad'); }
 };
@@ -277,11 +382,19 @@ $('finish').onclick = async () => {
     const scan = await api(`/api/scans/${scanId}/finish`, { method: 'POST' });
     stop();
     localStorage.removeItem(STORE);
-    $('doneText').textContent = `${scan.photos.length} photos, ${scan.coverage.have} of ${scan.coverage.wanted} angles covered.`;
-    $('hud').hidden = true; $('target').hidden = true; $('arrow').textContent = ''; $('done').hidden = false;
+    showDone(scan, `${scan.photos.length} photos · ${scan.coverage.have} of ${scan.coverage.wanted} angles covered.`);
   } catch (error) { stickyAlert(error.message, 'bad', 3500); }
 };
 $('again').onclick = () => location.reload();
+
+function showDone(scan, text) {
+  $('doneText').textContent = text;
+  $('hud').hidden = true; $('intro').hidden = true; $('done').hidden = false;
+  if (plan) {
+    drawCoverage($('doneMap').getContext('2d'), 400, plan, scan.coverage.counts);
+    $('donePercent').textContent = `${Math.round(100 * scan.coverage.have / scan.coverage.wanted)}%`;
+  }
+}
 
 // Fallback without a live camera: upload gallery photos into one scan; finish once 12 or more are accepted.
 let uploadScan = null;
@@ -300,13 +413,13 @@ $('files').onchange = async event => {
       if (!result.accepted) problems.push(`${file.name}: ${result.reason}`);
     }
     const scan = await api(`/api/scans/${uploadScan}`);
-    if (scan.photos.length < 12) {
-      status.textContent = `${scan.photos.length} photos accepted; upload at least 12. ${problems.join(' · ')}`;
+    if (scan.photos.length < MIN_PHOTOS) {
+      status.textContent = `${scan.photos.length} photos accepted; upload at least ${MIN_PHOTOS}. ${problems.join(' · ')}`;
       return;
     }
     const finished = await api(`/api/scans/${uploadScan}/finish`, { method: 'POST' });
-    $('doneText').textContent = `${finished.photos.length} uploaded photos saved.` + (problems.length ? ` Skipped: ${problems.join(' · ')}` : '');
-    $('intro').hidden = true; $('done').hidden = false; uploadScan = null;
+    uploadScan = null;
+    showDone(finished, `${finished.photos.length} uploaded photos saved.` + (problems.length ? ` Skipped: ${problems.join(' · ')}` : ''));
   } catch (error) {
     status.textContent = `Upload failed: ${error.message}`;
   }

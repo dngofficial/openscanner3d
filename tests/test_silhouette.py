@@ -39,7 +39,7 @@ def quaternion(rotation):
     return w, x, y, z
 
 
-def build_scene(root: Path):
+def build_scene(root: Path, two_colour=False):
     workspace, images = root / "run", root / "images"
     (workspace / "sparse" / "0").mkdir(parents=True)
     (workspace / "dense" / "0").mkdir(parents=True)
@@ -74,6 +74,24 @@ def build_scene(root: Path):
         photo = np.clip(photo.astype(int) + rng.integers(-8, 8, photo.shape), 0, 255).astype(np.uint8)  # Table grain.
         pixels, _ = silhouette.project(surface, camera, rotation, translation)
         cv2.fillConvexPoly(photo, cv2.convexHull(pixels.astype(np.float32)).astype(np.int32), (30, 25, 20))
+        if two_colour:
+            # Exact ray/cylinder intersections give a view-consistent red/blue height pattern.
+            yy, xx = np.mgrid[:HEIGHT, :WIDTH]
+            rays = np.stack([(xx - WIDTH / 2) / FOCAL, (yy - HEIGHT / 2) / FOCAL,
+                             np.ones_like(xx)], -1) @ rotation
+            centre = -rotation.T @ translation
+            a = (rays[..., :2] ** 2).sum(-1)
+            b = 2 * (rays[..., :2] * centre[:2]).sum(-1)
+            c = (centre[:2] ** 2).sum() - RADIUS ** 2
+            disc = b * b - 4 * a * c
+            distance = (-b - np.sqrt(np.maximum(disc, 0))) / (2 * a)
+            z = centre[2] + distance * rays[..., 2]
+            side = (disc >= 0) & (distance > 0) & (z >= 0) & (z <= TALL)
+            top_distance = (TALL - centre[2]) / rays[..., 2]
+            top_xy = centre[:2] + top_distance[..., None] * rays[..., :2]
+            top = (top_distance > 0) & ((top_xy ** 2).sum(-1) <= RADIUS ** 2)
+            photo[side & (z < TALL / 2)] = (190, 20, 20)
+            photo[(side & (z >= TALL / 2)) | top] = (20, 20, 190)
         cv2.imwrite(str(images / name), photo)
     return workspace, images
 
@@ -86,7 +104,7 @@ class SilhouetteTests(unittest.TestCase):
             info = silhouette.reconstruct_object(workspace, images, root)
             self.assertEqual(info["photos"], 16)
             self.assertFalse(info["clipped"])
-            mesh = trimesh.load(root / "object.glb", force="mesh")
+            mesh = trimesh.load(root / "object_hires.glb", force="mesh")
             width, tall, depth = mesh.extents  # y-up export
             self.assertAlmostEqual(tall, TALL, delta=.15)
             self.assertAlmostEqual(width, 2 * RADIUS, delta=.15)

@@ -50,22 +50,23 @@ Never bypass a browser certificate warning instead: the camera and sensors would
 2. Scan the QR code with the phone camera and open the link. The key is moved into a cookie and removed from the address bar.
 3. Put the object on a table with room to walk around it. Stand at the side you want as its front and point the phone at it.
 4. Tap **Start**, then allow camera access. On iPhone, also allow **Motion & Orientation**.
-5. Keep the object inside the dashed circle and follow the instruction at the top:
+5. Fill the dashed circle with the object and follow the instruction at the top. Below it, three chips show **Light**, **Steady** and **Angles tracked**; amber or red tells you what is stopping the next photo. An arrow at the screen edge points the way to walk, or up or down to change height.
    - **Walk left / right about N° around the object**: move to the next missing side.
    - **Raise the phone and look down** / **Lower the phone**: change height.
    - **Hold still. Capturing this angle.**: the photo is taken automatically when the phone is steady and the light is OK.
 
    A green flash plus a vibration (Android) or beep confirms a saved photo. A rejection shows the reason, such as "Blurry (sharpness 18, need 25)".
-6. The ring at the bottom left is the checklist, seen from above with the object in the middle. The outer ring is low angle and the inner ring is high angle; the start side is at the bottom. Grey means missing, amber partly done, teal done, and a white outline is the next target. The white dot is you.
-7. Tap **Finish** when the count reaches 36, or earlier if some angles are impossible. The laptop page then offers `scan.zip` and, in reconstruct mode, **Reconstruct**.
+6. The dial at the bottom left is the checklist, seen from above with the object in the middle, with the percentage done in the centre. The outer ring is low angle and the inner ring is high angle; the start side is at the bottom. Grey means missing, amber partly done, teal done, and a white outline is the next target. The white dot is you. Next to it: photos per height (for example "Low 4/12 · Mid 12/12 · High 8/12").
+   The bottom bar has the last photo (tap to delete it), **Auto on/off** (turn auto-capture off to shoot only with the round shutter button), the shutter, and sound on/off.
+7. Tap **Finish** when the dial reaches 100% (it turns green), or earlier once you have at least 12 photos. If few low-angle photos were taken, the phone asks you to confirm first. The laptop page then offers `scan.zip` and, in reconstruct mode, **Reconstruct**.
 
 **Tips:**
 - **Fill the dashed circle with the object.** In the first real scan the bottle filled about a tenth of the frame width, leaving too few pixels for detail.
 - Use a plain, contrasting background under the object, such as a white table for a dark object. The laptop cuts the object out by its outline, so contrast matters more than texture.
 - Cover low angles too. Photos only from above leave the lower sides of the object poorly defined.
 - Keep the phone the same way up (portrait or landscape) for the whole scan.
-- **Capture now** takes a photo manually at any time.
-- **Undo** removes the last photo.
+- The round **shutter** button takes a photo at any time.
+- Tap the **last-photo thumbnail** to delete that photo.
 - If the page reloads mid-scan, tap **Continue that scan**, stand where the first photo was taken, and tap **Re-align**.
 
 ## How the angle guidance works, and its limits
@@ -92,7 +93,7 @@ its current QR: restarting the server invalidates previous links. The login cook
 | Phone can't open the page | Same Wi-Fi? Laptop network set to Private? Firewall allowed Python on private networks? Guest or office Wi-Fi often blocks devices from talking to each other ("client isolation"); use a phone hotspot or home router instead. |
 | "Open the link or scan the QR code shown on the laptop" | The key is missing or old (the scanner restarted). Scan the QR code again. |
 | Certificate warning on the phone | The root certificate isn't trusted yet (iPhone: also turn on full trust), or the laptop's address changed. Rerun `scripts.make_cert` and use the new QR code. |
-| "Motion sensors unavailable" | iPhone: tap Start again and allow Motion & Orientation; if denied, enable it in Settings → Safari → Motion & Orientation Access. Use **Capture now** as a fallback. |
+| "Motion sensors unavailable" | iPhone: tap Start again and allow Motion & Orientation; if denied, enable it in Settings → Safari → Motion & Orientation Access. Use the **shutter** button as a fallback. |
 | Camera blocked | Allow camera access for the site in the browser settings, then tap Start again. |
 | "Keep the phone in the same orientation" | You rotated the phone; turn it back to how the first photo was taken. |
 
