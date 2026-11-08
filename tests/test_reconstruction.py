@@ -76,6 +76,22 @@ class ReconstructionTests(unittest.TestCase):
                     self.assertEqual((output / 'mesh.glb').read_bytes(), b'older scene')
                     self.assertEqual((output / 'object.glb').read_bytes(), b'older object')
 
+    def test_scan_zip_folder_keeps_phone_angles_and_tap(self):
+        import json
+        from scripts.reconstruct import carry_poses
+        with tempfile.TemporaryDirectory() as root:
+            extracted, output = Path(root) / 'zip', Path(root) / 'scan'
+            (extracted / 'images').mkdir(parents=True); output.mkdir()
+            files = [extracted / 'images' / name for name in ('kf_0000.jpg', 'kf_0001.jpg', 'extra.jpg')]
+            (extracted / 'poses.json').write_text(json.dumps([
+                dict(name='kf_0000.jpg', azimuth=0, pitch=35, ring=1, sector=0, tap=[.5, .4]),
+                dict(name='kf_0001.jpg', azimuth=30, pitch=35, ring=1, sector=1)]))
+            carry_poses(extracted / 'images', files, output)
+            poses = json.loads((output / 'poses.json').read_text())
+            self.assertEqual([pose['name'] for pose in poses], ['kf_0000.jpg', 'kf_0001.jpg', 'kf_0002.jpg'])
+            self.assertEqual(poses[0]['tap'], [.5, .4])
+            self.assertIsNone(poses[2]['azimuth'])  # A photo the phone did not record gets no invented angle.
+
     def test_missing_executable_and_exclusive_execution(self):
         with patch.object(reconstruction, 'resolve_tool', return_value=None):
             result = reconstruction.reconstruct(Path('images'), Path('output'), Settings(mode='reconstruct'))

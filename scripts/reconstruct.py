@@ -12,6 +12,18 @@ from backend.app.reconstruction import reconstruct
 from backend.app.images import MAX_UPLOAD_BYTES, decode_jpeg
 
 
+def carry_poses(source: Path, files: list[Path], output: Path) -> None:
+    """Keep the phone's angles and tap when the folder came from a scan.zip (poses.json beside images/)."""
+    try:
+        poses = {pose['name']: pose for pose in json.loads((source.parent / 'poses.json').read_text(encoding='utf-8'))}
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    blank = dict(azimuth=None, pitch=None, ring=None, sector=None, imported=True, quality={})
+    kept = [{**poses.get(path.name, blank), 'name': f'kf_{index:04d}.jpg'} for index, path in enumerate(files)]
+    if any(path.name in poses for path in files):
+        (output / 'poses.json').write_text(json.dumps(kept, indent=2), encoding='utf-8')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('images', type=Path, help='Folder of JPEG keyframes copied from a capture scan.')
@@ -36,6 +48,7 @@ def main() -> int:
             data = source.read_bytes()
             _, shape = decode_jpeg(data, shape, MAX_UPLOAD_BYTES)
             (images / f'kf_{index:04d}.jpg').write_bytes(data)
+        carry_poses(args.images, files, output)
         started = time.monotonic()
         result = reconstruct(images, output, settings)
         result['elapsed_seconds'] = round(time.monotonic() - started, 2)

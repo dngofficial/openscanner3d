@@ -109,7 +109,7 @@ To process a scan from another laptop, extract its `scan.zip`, then run:
 .venv/Scripts/python.exe -m scripts.reconstruct 'path\to\images'
 ```
 
-The result appears on the dashboard like a phone scan. To show a scan folder copied from another laptop (or made by an older version), put it in `scans/` and run:
+Pass the `images` folder of an extracted `scan.zip`: the `poses.json` next to it is kept, so the phone's angles and the tap that prompts SAM 2 are not lost (photos without angles get them from COLMAP). The result appears on the dashboard like a phone scan. To show a scan folder copied from another laptop (or made by an older version), put it in `scans/` and run:
 ```powershell
 .venv/Scripts/python.exe -m scripts.register_scan scans\SCAN_ID
 ```
