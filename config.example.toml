@@ -8,8 +8,9 @@ mode = "capture"
 colmap = 'colmap'
 blender = 'blender'
 
-# Initial bounded preset, not a guarantee of fitting in 8 GB VRAM.
-quality = "low"
+# Dense-stereo image size: low = 1000 px, medium = 1600 px, high = 2400 px (COLMAP presets).
+# Phone photos are 1920 px or more, so low throws most detail away. Drop to low if 8 GB VRAM runs out.
+quality = "medium"
 timeout_seconds = 1800
 max_photos = 100
 

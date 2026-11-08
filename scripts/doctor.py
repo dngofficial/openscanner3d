@@ -28,7 +28,7 @@ def inspect_machine() -> dict:
     dependencies = {}
     for package, module in (("fastapi", "fastapi"), ("uvicorn", "uvicorn"), ("numpy", "numpy"),
                             ("opencv-python", "cv2"), ("trimesh", "trimesh"), ("httpx", "httpx"), ("Pillow", "PIL"),
-                            ("segno", "segno")):
+                            ("segno", "segno"), ("scikit-image", "skimage")):
         try:
             imported = importlib.import_module(module)
             if module == "cv2":

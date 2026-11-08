@@ -6,3 +6,4 @@ opencv-python
 trimesh
 Pillow
 segno
+scikit-image

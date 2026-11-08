@@ -6,6 +6,7 @@ import threading
 import uuid
 
 from .config import Settings, resolve_tool
+from .silhouette import reconstruct_object
 
 _heavy_job = threading.Lock()
 REQUIRED_FLAGS = ("--workspace_path", "--image_path", "--quality", "--single_camera", "--mesher")
@@ -74,7 +75,19 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
             raise ValueError("Exported GLB contains no faces")
         for extension in ("obj", "glb"):
             os.replace(workspace / f"mesh.{extension}", output / f"mesh.{extension}")
-        return dict(msg="Experimental mesh exported. Texturing and topology cleanup are not implemented yet.", lvl="ok", done=True, model_ready=True)
+        message = "Scene mesh exported (COLMAP dense + Poisson)."
+        try:
+            # Plain objects give dense stereo little to work with; their outlines still define the shape.
+            info = reconstruct_object(workspace, images, workspace)
+            for extension in ("obj", "glb"):
+                os.replace(workspace / f"object.{extension}", output / f"object.{extension}")
+            message += (f" Object from {info['photos']} outlines: object.glb ({info['faces']} faces, vertex colours)."
+                        + (" It touches the search box edge, so part may be cut off." if info["clipped"] else ""))
+            return dict(msg=message, lvl="warn" if info["clipped"] else "ok", done=True, model_ready=True, object=info)
+        except (ValueError, OSError, np.linalg.LinAlgError) as error:
+            for extension in ("obj", "glb"):
+                (output / f"object.{extension}").unlink(missing_ok=True)  # Never pair a new scene with an old object.
+            return dict(msg=f"{message} Object reconstruction failed: {error}.", lvl="warn", done=True, model_ready=True)
     except subprocess.TimeoutExpired:
         return dict(msg="Reconstruction timed out; its process tree was stopped. Photos remain available.", lvl="bad", done=False)
     finally:

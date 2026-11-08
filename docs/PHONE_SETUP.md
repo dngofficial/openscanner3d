@@ -61,6 +61,9 @@ Never bypass a browser certificate warning instead: the camera and sensors would
 7. Tap **Finish** when the count reaches 60, or earlier if some angles are impossible. The laptop page then offers `scan.zip` and, in reconstruct mode, **Reconstruct**.
 
 **Tips:**
+- **Fill the dashed circle with the object.** In the first real scan the bottle filled about a tenth of the frame width, leaving too few pixels for detail.
+- Use a plain, contrasting background under the object, such as a white table for a dark object. The laptop cuts the object out by its outline, so contrast matters more than texture.
+- Cover low angles too. Photos only from above leave the lower sides of the object poorly defined.
 - Keep the phone the same way up (portrait or landscape) for the whole scan.
 - **Capture now** takes a photo manually at any time.
 - **Undo** removes the last photo.

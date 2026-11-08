@@ -64,7 +64,30 @@ The angles come from the phone's motion sensors and assume you keep the object c
 
 ### Reconstruction (GPU laptop)
 
-Set `mode = "reconstruct"` and the `colmap` path in `config.local.toml` (COLMAP Windows **CUDA** build). Then press **Reconstruct** on a finished scan. It runs in the background; the scan shows `running`, then `ready` or `failed`, and offers `mesh.glb`, `mesh.obj` and `colmap.log`.
+Set `mode = "reconstruct"` and the `colmap` path in `config.local.toml` (COLMAP Windows **CUDA** build). Then press **Reconstruct** on a finished scan. It runs in the background; the scan shows `running`, then `ready` or `failed`, and offers these files:
+
+- **`object.glb` / `object.obj`: the scanned object.** Built from its outlines (silhouette carving, or "visual hull") using COLMAP's camera positions, so it works on plain objects that dense stereo can't see, such as a matte black bottle. It stands upright on the ground plane, centred, with colours sampled from the photos.
+- **`mesh.glb` / `mesh.obj`: the whole scene** from COLMAP dense stereo and Poisson meshing, usually dominated by the table.
+- **`colmap.log`.**
+
+How the object step works (`backend/app/silhouette.py`):
+1. Find the table as the dominant plane in COLMAP's dense points.
+2. Place the object where the cameras' viewing directions meet.
+3. Outline it in every photo with GrabCut, told that table pixels away from the object are background. This is classical computer vision, not ML.
+4. Carve the space inside all but a couple of outlines, mesh it, smooth it, and colour it.
+
+Limits of the object model:
+- A visual hull is an outer bound. Concavities no outline reveals stay filled, such as the space inside a handle loop or a cup.
+- Scale is arbitrary.
+
+On the first real scan (36 Samsung photos of a black bottle), the scene mesh was a table disc with a hole where the bottle stood. `object.glb` gave an upright bottle-shaped model in about 60 s on a laptop CPU.
+
+To rebuild `object.glb` for a scan that COLMAP already processed, without rerunning COLMAP:
+```powershell
+.venv/Scripts/python.exe -m scripts.rebuild_object scans\SCAN_ID
+```
+
+Use `quality = "medium"` (the default in `config.example.toml`) or `high`. `low` downsizes photos to 1000 px for dense stereo.
 
 To process a scan from another laptop, extract its `scan.zip`, then run:
 ```powershell
@@ -135,5 +158,6 @@ The phone page was also driven in a browser with a synthetic camera and simulate
 
 - Angle guidance assumes a stationary, centred object; turning the object instead is not supported in this mode.
 - The phone's heading drifts slowly, and compass interference is possible indoors.
-- Photos are the browser's video frames (requested at 1920×1080), not full-resolution stills.
-- Reconstruction is COLMAP's experimental untextured mesh; scale is arbitrary.
+- Photos are the browser's video frames (4K requested; many phones deliver 1920×1080), not full-resolution stills.
+- `object.glb` is a silhouette hull with vertex colours: smooth surfaces come out well, but concavities fill in, and there is no UV texture. It needs a visible supporting surface (table) in the dense points.
+- Scale is arbitrary.

@@ -29,6 +29,22 @@ class ReconstructionTests(unittest.TestCase):
             self.assertGreater(len(trimesh.load(output / 'mesh.glb', force='mesh').faces), 0)
             self.assertTrue((output / 'mesh.obj').is_file())
 
+    def test_object_failure_keeps_scene_mesh_and_drops_stale_object(self):
+        import trimesh
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)
+            (output / 'object.glb').write_bytes(b'from an earlier run')
+            def produce_mesh(command, log, timeout):
+                target = Path(command[command.index('--workspace_path') + 1]) / 'dense/0/meshed-poisson.ply'
+                target.parent.mkdir(parents=True)
+                trimesh.creation.box().export(target)
+                return 0  # No sparse model, so the silhouette step cannot run.
+            with patch.object(reconstruction, 'resolve_tool', return_value='colmap'),                  patch.object(reconstruction, 'colmap_help'),                  patch.object(reconstruction, 'run_logged', side_effect=produce_mesh):
+                result = reconstruction.reconstruct(output / 'images', output, Settings(mode='reconstruct'))
+            self.assertTrue(result['model_ready'])
+            self.assertIn('Object reconstruction failed', result['msg'])
+            self.assertFalse((output / 'object.glb').exists())
+
     def test_missing_executable_and_exclusive_execution(self):
         with patch.object(reconstruction, 'resolve_tool', return_value=None):
             result = reconstruction.reconstruct(Path('images'), Path('output'), Settings(mode='reconstruct'))

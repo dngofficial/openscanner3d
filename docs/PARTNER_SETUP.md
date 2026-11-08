@@ -36,6 +36,12 @@ Passing means the prerequisites were found, not that reconstruction works. The r
 
 ## 3. Run a real reconstruction
 
+Use `quality = "medium"` (dense stereo up to 1600 px) unless 8 GB of VRAM runs out; `low` (1000 px) throws away most of a phone photo. Each finished run produces `object.glb` (the object from its outlines) next to `mesh.glb` (the whole scene). For scans COLMAP already processed, rebuild the object without rerunning COLMAP:
+
+```powershell
+.venv/Scripts/python.exe -m scripts.rebuild_object scans\SCAN_ID
+```
+
 **From the browser:**
 ```powershell
 ./scripts/launch.ps1 -Mode reconstruct

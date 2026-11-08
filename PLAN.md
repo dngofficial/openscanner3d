@@ -22,6 +22,8 @@ Assume a 24–48-hour event, one processing computer, and one active scan. The c
 - [x] Laptop dashboard: QR code or the exact connection problem, scans with checklist maps, thumbnails, downloads, Reconstruct.
 - [x] Tests: guidance maths (Node), API/access control/uploads (Python), setup smoke check. Browser run with a synthetic camera and simulated sensors.
 - [ ] Real iPhone and Android test with the mkcert root (see docs/PHONE_SETUP.md checklist).
+- [x] Object from silhouettes (`object.glb`): table plane from dense points, cameras' convergence point, geometry-seeded GrabCut outlines (two passes), visual-hull carving, marching cubes, median vertex colours, upright y-up export, and `scripts.rebuild_object` for existing runs. First real scan (36 photos, black bottle): the scene mesh was a table with a hole, while object.glb was an upright bottle shape in about 60 s on CPU. Tested on a synthetic cylinder scene. Masks are classical CV; an ML segmenter can supply masks instead.
+- [x] Capture: "fill the circle" cue with a larger target, 4K camera request, `quality = "medium"` default.
 - [ ] Fast feed-forward reconstruction path (VGGT or Fast3R from the guided photos, automatic background removal, Poisson mesh), validated on the GPU laptop.
 - [ ] Viewer with wireframe toggle; optional quad remesh with colour re-baked.
 - Implemented foundation: capture/reconstruct modes, configured tool paths, constrained Python dependencies, Windows setup/launch scripts, doctor report, bounded reconstruction attempts, and photo-import fallback. See `docs/PARTNER_SETUP.md` and `docs/PHONE_SETUP.md`.

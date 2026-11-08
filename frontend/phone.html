@@ -15,8 +15,10 @@
   .layer > * { pointer-events:auto; }
   #alert { background:var(--panel); border-left:8px solid var(--dim); border-radius:8px; padding:14px 16px; font-size:20px; font-weight:650; min-height:64px; }
   #alert.ok { border-color:var(--ok); } #alert.warn { border-color:var(--warn); } #alert.bad { border-color:var(--bad); }
-  #target { position:fixed; left:50%; top:50%; width:46vmin; height:46vmin; transform:translate(-50%,-50%); border:3px dashed rgba(255,255,255,.75);
+  #target { position:fixed; left:50%; top:50%; width:62vmin; height:62vmin; transform:translate(-50%,-50%); border:3px dashed rgba(255,255,255,.75);
             border-radius:50%; pointer-events:none; }
+  #target span { position:absolute; left:50%; top:100%; transform:translate(-50%, 8px); white-space:nowrap; font-size:14px; font-weight:600;
+                 color:#fff; text-shadow:0 0 6px #000; }
   #arrow { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); font-size:22vmin; line-height:1; color:#fff;
            text-shadow:0 0 12px #000; pointer-events:none; }
   #flash { position:fixed; inset:0; border:10px solid var(--ok); opacity:0; transition:opacity .4s; pointer-events:none; }
@@ -40,7 +42,7 @@
 </head>
 <body>
 <video id="video" playsinline muted autoplay></video>
-<div id="target" hidden></div>
+<div id="target" hidden><span>Fill this circle with the object</span></div>
 <div id="arrow" aria-hidden="true"></div>
 <div id="flash"></div>
 <div class="layer" id="hud" hidden>
@@ -61,7 +63,8 @@
     <li>Put the object on a table with space to walk around it. It must not move during the scan.</li>
     <li>Stand at the side you want as the front and point the phone at the object.</li>
     <li>Tap <strong>Start</strong> and allow the camera and motion access.</li>
-    <li>Keep the object inside the dashed circle. Follow the instructions at the top; photos are taken automatically when you reach a missing angle and hold still.</li>
+    <li>Stand close enough that the object <strong>fills the dashed circle</strong>, and keep it centred. A small object far away gives the laptop too few pixels to reconstruct.</li>
+    <li>Follow the instructions at the top; photos are taken automatically when you reach a missing angle and hold still.</li>
   </ol>
   <p>Keep the phone the same way up (portrait or landscape) for the whole scan.</p>
   <button id="start" class="go">Start</button>
@@ -153,7 +156,7 @@ async function permissions() {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error(window.isSecureContext
     ? 'This browser cannot open the camera.' : 'The camera needs the trusted HTTPS link from the laptop (see PHONE_SETUP).');
   stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } } });
   video.srcObject = stream;
   await video.play();
   audio = new (window.AudioContext || window.webkitAudioContext)();

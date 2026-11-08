@@ -34,7 +34,7 @@ PHOTO = r"kf_[0-9]{4}\.jpg"
 MIN_PHOTOS = 12
 PAGES = {"/": "index.html", "/phone": "phone.html"}
 MODULES = {"guidance.mjs"}
-DOWNLOADS = {"scan.zip", "mesh.glb", "mesh.obj", "colmap.log"}
+DOWNLOADS = {"scan.zip", "object.glb", "object.obj", "mesh.glb", "mesh.obj", "colmap.log"}
 _write_lock = threading.Lock()
 app = FastAPI()
 
