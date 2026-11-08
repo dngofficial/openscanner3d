@@ -53,6 +53,23 @@ class ResourceTests(unittest.TestCase):
 
 
 class GeometryTests(unittest.TestCase):
+    def test_rotating_item_masks_inputs_without_changing_framing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"image.png";mask_path=Path(folder)/"mask.png"
+            Image.new("RGB",(400,300),(30,80,120)).save(path)
+            mask=np.zeros((300,400),np.uint8);mask[60:240,100:300]=255
+            cv2.imwrite(str(mask_path),mask)
+            full,_,transforms=prepare_inputs([path],[mask_path],224,True)
+            isolated,masks,isolated_transforms=prepare_inputs([path],[mask_path],224,True,isolate=True)
+            np.testing.assert_array_equal(isolated[~masks],255)
+            np.testing.assert_array_equal(isolated[masks],full[masks])
+            self.assertEqual(transforms,isolated_transforms)
+            cv2.imwrite(str(mask_path),np.zeros_like(mask))
+            with self.assertRaisesRegex(ValueError,"empty foreground"):
+                prepare_inputs([path],[mask_path],224,True,isolate=True)
+            with self.assertRaisesRegex(ValueError,"mask for every"):
+                prepare_inputs([path],[None],224,True,isolate=True)
+
     def test_letterbox_preserves_aspect_and_masks_padding(self):
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/"image.jpg";Image.new("RGB",(800,400),(120,80,30)).save(path)
@@ -97,7 +114,7 @@ class ApiTests(unittest.TestCase):
         server.SESSIONS.clear();self.client=TestClient(server.app)
         self.scan=self.client.post("/api/scans").json();self.path="/api/scans/"+self.scan["id"]
         self.client.put(self.path+"/settings",json=dict(auto=False,foreground=False,image_size=224,max_views=6))
-        self.client.put(self.path+"/capture-settings",json=dict(roi=[.1,.1,.9,.9],background=False,preview=False,denoise=False))
+        self.client.put(self.path+"/capture-settings",json=dict(mode="auto",roi=[.1,.1,.9,.9],background=False,preview=False,denoise=False))
     def tearDown(self):
         self.client.close();self.storage.stop();self.backend.stop();self.worker.stop();server.SESSIONS.clear();self.temp.cleanup()
     def upload(self,n): return self.client.post(self.path+"/photos",content=image_bytes(n),params=dict(name=f"angle {n}.jpg"))
@@ -110,6 +127,55 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/scans",headers=dict(Origin="https://other.example")).status_code,403)
         self.assertTrue(self.upload(0).json()["added"]);self.assertFalse(self.upload(0).json()["added"])
         self.assertEqual(self.client.get(self.path+"/results/"+("a"*32)+"/session.json").status_code,404)
+
+    def test_manual_capture_only_saves_requested_photos_and_finishes(self):
+        config=dict(type="settings",mode="manual",roi=[.1,.1,.9,.9],background=False,preview=False,denoise=False)
+        with self.client.websocket_connect("/ws/"+self.scan["id"]) as ws:
+            self.assertEqual(ws.receive_json()["type"],"ready")
+            ws.send_text(json.dumps(config));self.assertEqual(ws.receive_json()["type"],"settings")
+            for i in range(3):
+                ws.send_bytes(image_bytes(i));self.assertFalse(ws.receive_json()["saved"])
+            for i in range(3):
+                ws.send_text("capture");self.assertEqual(ws.receive_json()["type"],"capture")
+                ws.send_bytes(image_bytes(i));self.assertTrue(ws.receive_json()["saved"])
+                ws.send_bytes(image_bytes(i+10));self.assertFalse(ws.receive_json()["saved"])
+        snapshot=self.client.get(self.path).json()
+        self.assertEqual(len(snapshot["photos"]),3);self.assertFalse(self.queue.jobs)
+        self.assertTrue(all(p["source"]=="manual" for p in snapshot["photos"]))
+        self.client.put(self.path+"/settings",json=dict(auto=True,foreground=False,image_size=224,max_views=4))
+        self.assertFalse(self.client.get(self.path).json()["auto"]);self.assertFalse(self.queue.jobs)
+        self.assertEqual(self.client.post(self.path+"/finish").status_code,200)
+        self.queue.run_next();snapshot=self.client.get(self.path).json()
+        self.assertTrue(snapshot["latest_result"]["final"])
+        response=self.client.get(self.path+"/results/"+snapshot["latest_result"]["id"]+"/merged.ply")
+        self.assertEqual(response.status_code,200);self.assertTrue(response.content.startswith(b"ply\n"))
+
+    def test_manual_soft_frame_is_saved_once_and_mode_is_validated(self):
+        self.assertEqual(self.client.put(self.path+"/capture-settings",json=dict(mode="invalid")).status_code,400)
+        self.assertEqual(self.client.put(self.path+"/settings",json=dict(turntable=True,foreground=False)).status_code,400)
+        with self.client.websocket_connect("/ws/"+self.scan["id"]) as ws:
+            ws.receive_json()
+            ws.send_text(json.dumps(dict(type="settings",mode="manual",background=False,denoise=False)))
+            self.assertEqual(ws.receive_json()["type"],"settings")
+            buf=BytesIO();Image.new("RGB",(640,480),(100,100,100)).save(buf,"JPEG")
+            ws.send_text("capture");ws.receive_json()
+            with patch("capture.clean_frame",return_value=(np.zeros((480,640,3),np.uint8),np.zeros((480,640),np.uint8))):
+                ws.send_bytes(buf.getvalue());result=ws.receive_json()
+            self.assertTrue(result["saved"]);self.assertIn("soft",result["note"]);self.assertIn("empty",result["note"])
+            ws.send_bytes(buf.getvalue());self.assertFalse(ws.receive_json()["saved"])
+        self.assertEqual(len(self.client.get(self.path).json()["photos"]),1)
+
+    def test_new_scan_manual_defaults_and_old_scan_capture_compatibility(self):
+        new=self.client.post("/api/scans").json()
+        self.assertEqual(new["capture_settings"]["mode"],"manual")
+        self.assertFalse(new["auto"]);self.assertTrue(new["options"]["turntable"])
+        self.assertEqual(new["options"]["max_views"],4)
+        old=dict(self.client.get(self.path).json());old.pop("id")
+        old["capture_settings"].pop("mode");old["options"].pop("turntable",None)
+        from capture import Capture
+        session=server.Session(self.scan["id"],old)
+        result=Capture(session,lambda *args:None).process(image_bytes(90))
+        self.assertTrue(result["saved"])
 
     def test_capture_continues_during_background_job(self):
         self.add_views();self.client.post(self.path+"/build")

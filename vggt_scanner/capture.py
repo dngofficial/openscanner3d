@@ -49,16 +49,19 @@ class Capture:
         _,mask=clean_frame(work,roi=settings["roi"],background=settings["background"],denoise=settings["denoise"])
         current=self.features(work)
         foreground=float(np.mean(mask>0))
-        saved=False;note="Waiting for a changed view."
+        requested=self.force;self.force=False
+        manual=settings.get("mode","auto")=="manual"
+        saved=False;note="Rotate the item, move your hands away, then click Take photo." if manual else "Waiting for a changed view."
         with self.session.lock:
             if self.session.data["finish_requested"]: raise ValueError("Finish was requested. Start a new scan or resume capture.")
             self.session.data["processed"]+=1
             frame_number=self.session.data["processed"]
             photos=self.session.data["photos"]
             if len(photos)>=200: note="200-view limit reached. Finish the reconstruction."
-            elif foreground<.01: note="Foreground mask is empty. Adjust the rectangle or disable background removal."
-            elif current["sharpness"]<8 and not self.force: note="Skipped a very soft frame; hold steady briefly."
-            elif self.novel(current):
+            elif manual and not requested: pass
+            elif foreground<.01 and not requested: note="Foreground mask is empty. Adjust the rectangle or disable background removal."
+            elif current["sharpness"]<8 and not requested: note="Skipped a very soft frame; hold steady briefly."
+            elif requested or self.novel(current):
                 image_id=uuid.uuid4().hex;encoded=cv2.imencode(".jpg",raw,[cv2.IMWRITE_JPEG_QUALITY,95])[1].tobytes()
                 (self.session.root/"images"/(image_id+".jpg")).write_bytes(encoded)
                 cv2.imwrite(str(self.session.root/"masks"/(image_id+".png")),feature_mask(mask))
@@ -66,9 +69,12 @@ class Capture:
                 cv2.imwrite(str(self.session.root/"thumbs"/(image_id+".jpg")),thumb)
                 photos.append(dict(id=image_id,name=f"View {len(photos)+1}",width=raw.shape[1],height=raw.shape[0],
                                    sharpness=current["sharpness"],features=len(current["xy"]),
+                                   source="manual" if requested else "automatic",
                                    digest=hashlib.sha256(encoded).hexdigest()))
                 self.session.data["revision"]+=1
-                self.last=current;self.force=False;saved=True;note="Selected a new keyframe."
+                self.last=current;saved=True;note="Photo saved. Rotate the item before taking the next photo." if requested else "Selected a new keyframe."
+                if foreground<.01: note+=" Foreground mask is empty; adjust the rectangle and retake this photo."
+                if current["sharpness"]<8: note+=" This photo looks soft; consider retaking it."
             self.session.persist()
             count=len(photos)
         if settings.get("preview"):

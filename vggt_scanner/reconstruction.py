@@ -23,13 +23,15 @@ def reconstruct(root,job_id,photos,options,cancel,update,backend,final=False):
     selected=select_views(photos,options["max_views"] if final else min(8,options["max_views"]))
     log=output/"reconstruction.log"
     report=dict(engine="VGGT",final=final,captured_views=len(photos),selected_views=len(selected),
-                selected_ids=[p["id"] for p in selected],model=backend.status()["model"])
+                selected_ids=[p["id"] for p in selected],model=backend.status()["model"],
+                rotating_item=options.get("turntable",False))
     try:
         if cancel.is_set(): raise InterruptedError("Reconstruction cancelled.")
         update(stage="inputs",progress=10,message=f"Preparing {len(selected)} overlapping views…")
         paths=[root/"images"/(p["id"]+".jpg") for p in selected]
         masks=[root/"masks"/(p["id"]+".png") for p in selected]
-        images,foreground,transforms=prepare_inputs(paths,masks,options["image_size"],options["foreground"])
+        images,foreground,transforms=prepare_inputs(paths,masks,options["image_size"],options["foreground"],
+                                                   isolate=options.get("turntable",False))
         if cancel.is_set(): raise InterruptedError("Reconstruction cancelled.")
         update(stage="model",progress=20,message="Loading or waiting for the VGGT model…")
         predictions=backend.predict(images,cancel,update)
@@ -47,7 +49,9 @@ def reconstruct(root,job_id,photos,options,cancel,update,backend,final=False):
             original[1,2]=(K[1,2]-transform["top"])/transform["scale_y"]
             cameras.append(dict(id=photo["id"],world_to_camera=E.tolist(),model_intrinsics=K.tolist(),
                                 original_image_intrinsics=original.tolist(),letterbox=transform))
-        (output/"cameras.json").write_text(json.dumps(dict(convention="OpenCV world-to-camera; scale arbitrary",cameras=cameras),indent=2))
+        convention="OpenCV world-to-camera; scale arbitrary"
+        if options.get("turntable",False): convention+="; virtual cameras relative to the rotating object"
+        (output/"cameras.json").write_text(json.dumps(dict(convention=convention,cameras=cameras),indent=2))
         np.savez_compressed(output/"predictions.npz",**predictions)
         report["seconds"]=round(time.monotonic()-started,2)
         (output/"report.json").write_text(json.dumps(report,indent=2),encoding="utf-8")

@@ -37,9 +37,9 @@ class Session:
         self.id=scan_id;self.root=SCANS/scan_id;self.lock=RLock();self.cancel=Event()
         self.live_connected=False;self.last_start=0.;self.future=None;self.preview={}
         for folder in ("images","masks","thumbs","reconstructions"): (self.root/folder).mkdir(parents=True,exist_ok=True)
-        self.data=data or dict(photos=[],revision=0,processed=0,auto=True,finish_requested=False,
-              options=dict(max_views=8,image_size=224,confidence=35,consistency=True,cleanup=True,foreground=True,interval=8),
-              capture_settings=dict(background=True,denoise=True,roi=[.1,.08,.9,.92],preview=False),
+        self.data=data or dict(photos=[],revision=0,processed=0,auto=False,finish_requested=False,
+              options=dict(max_views=4,image_size=224,confidence=35,consistency=True,cleanup=True,foreground=True,turntable=True,interval=8),
+              capture_settings=dict(mode="manual",background=True,denoise=True,roi=[.1,.08,.9,.92],preview=False),
               job=dict(state="idle",stage="capture",progress=0,message="Capture or upload overlapping views."),
               latest_result=None,final_pending=False)
         if self.data["job"]["state"] in ACTIVE:
@@ -90,6 +90,7 @@ def schedule(session,final=False):
 
 def maybe_schedule(session):
     with session.lock:
+        if session.data["capture_settings"].get("mode","auto")=="manual": return
         if not session.data["auto"] or session.data["finish_requested"] or len(session.data["photos"])<3: return
         if session.data["job"]["state"] in ACTIVE: return
         if not BACKEND.status()["installed"] or BACKEND.status()["state"]=="error": return
@@ -200,6 +201,7 @@ class Settings(BaseModel):
     consistency:bool=True
     cleanup:bool=True
     foreground:bool=True
+    turntable:bool=False
     interval:int=Field(8,ge=5,le=120)
     auto:bool=True
 
@@ -208,8 +210,11 @@ class Settings(BaseModel):
 def settings(scan_id:str,settings:Settings):
     session=get_session(scan_id)
     if settings.image_size not in (224,336,518): raise HTTPException(400,"Choose 224, 336 or 518 pixels.")
+    if settings.turntable and not settings.foreground:
+        raise HTTPException(400,"Rotating-item reconstruction needs Object-only cloud enabled.")
     with session.lock:
         values=settings.model_dump();session.data["auto"]=values.pop("auto")
+        if session.data["capture_settings"].get("mode","auto")=="manual": session.data["auto"]=False
         session.data["options"]=values
         session.data["capture_settings"]["background"]=values["foreground"]
         session.data["revision"]+=1
@@ -218,17 +223,26 @@ def settings(scan_id:str,settings:Settings):
     return session.snapshot()
 
 
+def parse_capture_settings(values,previous):
+    if not isinstance(values,dict): raise ValueError("Invalid capture settings.")
+    roi=values.get("roi",[.1,.08,.9,.92])
+    if not isinstance(roi,list) or len(roi)!=4 or not all(isinstance(v,(int,float)) and np.isfinite(v) for v in roi) or not (0<=roi[0]<roi[2]<=1 and 0<=roi[1]<roi[3]<=1):
+        raise ValueError("Invalid object region.")
+    mode=values.get("mode",previous.get("mode","auto"))
+    if mode not in ("manual","auto"): raise ValueError("Choose manual or automatic photo capture.")
+    return dict(mode=mode,roi=roi,background=bool(values.get("background",True)),
+                denoise=bool(values.get("denoise",True)),preview=bool(values.get("preview",False)))
+
+
 @app.put("/api/scans/{scan_id}/capture-settings")
 async def capture_settings(scan_id:str,request:Request):
     values=await request.json()
-    if not isinstance(values,dict): raise HTTPException(400,"Invalid capture settings.")
-    roi=values.get("roi",[.1,.08,.9,.92])
-    if not isinstance(roi,list) or len(roi)!=4 or not all(isinstance(v,(int,float)) and np.isfinite(v) for v in roi) or not (0<=roi[0]<roi[2]<=1 and 0<=roi[1]<roi[3]<=1):
-        raise HTTPException(400,"Invalid object region.")
     session=get_session(scan_id)
     with session.lock:
-        session.data["capture_settings"]=dict(roi=roi,background=bool(values.get("background",True)),
-                                              denoise=bool(values.get("denoise",True)),preview=bool(values.get("preview",False)))
+        try: config=parse_capture_settings(values,session.data["capture_settings"])
+        except ValueError as error: raise HTTPException(400,str(error)) from error
+        session.data["capture_settings"]=config
+        if config["mode"]=="manual": session.data["auto"]=False
         session.persist()
     return session.snapshot()
 
@@ -372,14 +386,11 @@ async def websocket(ws:WebSocket,scan_id:str):
             else:
                 try:
                     values=json.loads(message.get("text",""))
-                    if not isinstance(values,dict): raise ValueError("Invalid settings.")
-                    roi=values.get("roi",[.1,.08,.9,.92])
-                    if values.get("type")!="settings" or not isinstance(roi,list) or len(roi)!=4: raise ValueError("Invalid settings.")
-                    if not all(isinstance(v,(int,float)) and np.isfinite(v) for v in roi) or not (0<=roi[0]<roi[2]<=1 and 0<=roi[1]<roi[3]<=1):
-                        raise ValueError("Invalid object region.")
+                    if not isinstance(values,dict) or values.get("type")!="settings": raise ValueError("Invalid settings.")
                     with session.lock:
-                        session.data["capture_settings"]=dict(roi=roi,background=bool(values.get("background",True)),
-                                                              denoise=bool(values.get("denoise",True)),preview=bool(values.get("preview",False)))
+                        config=parse_capture_settings(values,session.data["capture_settings"])
+                        session.data["capture_settings"]=config
+                        if config["mode"]=="manual": session.data["auto"]=False
                         session.persist()
                     await ws.send_json(dict(type="settings"))
                 except (ValueError,TypeError) as error: await ws.send_json(dict(type="command_error",message=str(error)))

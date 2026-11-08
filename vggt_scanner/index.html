@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Live multi-view 3D scanner · VGGT</title>
+<title>Multi-angle photo scanner · VGGT</title>
 <style>
 :root{color-scheme:dark;--bg:#101719;--panel:#1b262a;--line:#385052;--text:#e6eeea;--dim:#a3b8b6;--mint:#a4dfb0;--amber:#ffca78}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
@@ -28,17 +28,17 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 </style>
 </head>
 <body>
-<header><h1>Live multi-view 3D scanner</h1><p class="muted">Keep a few useful angles. Watch the joint reconstruction update. Finish with a colored PLY.</p></header>
+<header><h1>Multi-angle photo scanner</h1><p class="muted">Rotate your item. Take a photo at each angle. Build a colored PLY when you are ready.</p></header>
 <main>
 <div class="workspace">
 <div class="grid">
-<section class="panel"><h2>Camera · full images retained for reconstruction</h2>
+<section class="panel"><h2>Live camera</h2>
 <div class="video-wrap"><video id="video" width="640" height="480" autoplay playsinline muted></video><canvas id="roi" width="640" height="480" aria-label="Drag a rectangle around the whole object"></canvas></div>
-<small>Drag a region around the entire object. Keep it inside as you move the camera.</small></section>
-<section class="panel"><h2>Foreground and capture</h2><img id="mask" alt="Latest foreground mask">
+<small>Drag a rectangle around the entire item. Keep the same framing while you rotate it.</small></section>
+<section class="panel"><h2>Latest photo foreground</h2><img id="mask" alt="Foreground mask from the latest processed camera image">
 <p id="frameNote" class="status">Start the camera or upload photos.</p>
 <dl><dt>Processed frames</dt><dd id="processed">0</dd><dt>Selected views</dt><dd id="saved">0 / 200</dd><dt>Image detail</dt><dd id="features">–</dd><dt>Sharpness</dt><dd id="sharpness">–</dd></dl>
-<small>The foreground mask filters 3D output; it does not paint over the model's input images.</small></section>
+<small id="maskTip">Rotating-item mode removes the background before reconstruction. Check that this mask includes the entire item.</small></section>
 </div>
 <section class="panel"><div class="row"><h2>Joint multi-view reconstruction</h2><button id="resetView">Reset view</button></div>
 <canvas id="mergedCloud" class="cloud" width="1100" height="600" aria-label="Latest joint reconstructed point cloud"></canvas>
@@ -48,7 +48,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 </section>
 <section class="panel"><div class="row"><h2>Selected angles</h2><button id="upload">Add photos</button></div>
 <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
-<p id="uploadStatus" class="muted">Camera keyframes and uploaded photos can share a scan.</p><div id="gallery"></div></section>
+<p id="uploadStatus" class="muted">Review your photos here. Remove an unwanted angle with ×, then take it again.</p><div id="gallery"></div></section>
 <details class="panel"><summary>Optional single-frame depth preview</summary>
 <label class="inline"><input id="previewEnabled" type="checkbox"> Enable independent Depth Anything preview</label>
 <canvas id="localCloud" class="cloud" width="900" height="450" aria-label="Optional relative-depth preview"></canvas>
@@ -60,29 +60,34 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline
 <div id="engine" class="status">Checking VGGT…</div><button id="loadModel" class="full">Load VGGT model</button>
 <small style="display:block;margin-top:8px">First load downloads several GB of weights. Capture can run while the model loads.</small>
 <label for="camera">Camera</label><select id="camera" class="full"><option value="">Default camera</option></select>
-<button id="start" class="primary full" style="margin-top:12px">Start / resume live capture</button>
-<div class="row" style="margin-top:10px"><button id="pause" disabled>Pause</button><button id="save" disabled>Keep this view</button></div>
+<label for="captureMode">Save photos</label><select id="captureMode" class="full"><option value="manual" selected>Manually · click Take photo</option><option value="auto">Automatically · changed views</option></select>
+<p id="captureTip" class="muted">Keep the camera fixed. Rotate the item a little, remove your hands, then take the next photo.</p>
+<button id="start" class="full" style="margin-top:12px">Start / resume camera</button>
+<button id="save" class="primary full" style="margin-top:10px" disabled>Take photo</button>
+<button id="pause" class="full" style="margin-top:10px" disabled>Pause capture</button>
 <button id="build" class="full" style="margin-top:12px" disabled>Reconstruct now</button>
 <button id="finish" class="primary full" style="margin-top:10px" disabled>Finish &amp; export PLY</button>
 <button id="cancel" class="full" style="margin-top:10px;display:none">Cancel reconstruction</button>
 <button id="new" class="full" style="margin-top:10px">New scan</button>
-<p id="status" class="status" role="status">Capture overlapping angles of a stationary object.</p><p id="error" role="alert"></p>
+<p id="status" class="status" role="status">Start the camera, then choose when to take each photo.</p><p id="error" role="alert"></p>
 </section>
 <section class="panel"><h2>Reconstruction settings</h2>
-<label class="inline"><input id="auto" type="checkbox" checked> Update automatically during capture</label>
-<label>Maximum views per final pass<select id="views" class="full"><option>3</option><option>4</option><option>6</option><option selected>8</option><option>12</option><option>16</option><option>24</option></select></label>
+<label class="inline"><input id="auto" type="checkbox"> Update automatically during automatic capture</label>
+<label>Maximum views per final pass<select id="views" class="full"><option>3</option><option selected>4</option><option>6</option><option>8</option><option>12</option><option>16</option><option>24</option></select></label>
 <label>Model input size<select id="size" class="full"><option value="224" selected>224 · least memory</option><option value="336">336 · balanced</option><option value="518">518 · more detail / memory</option></select></label>
 <label>Drop weakest confidence predictions <span id="confValue">35%</span><input id="confidence" class="full" type="range" min="0" max="90" value="35"></label>
 <label class="inline"><input id="foreground" type="checkbox" checked> Object-only cloud</label>
+<label class="inline"><input id="turntable" type="checkbox" checked> Fixed camera / rotating item</label>
+<small>Removes the stationary background from model inputs. Use a plain backdrop and keep hands out of each photo. Disable this when moving the camera around a stationary scene.</small>
 <label class="inline"><input id="consistency" type="checkbox" checked> Require support from another view</label>
 <label class="inline"><input id="cleanup" type="checkbox" checked> Remove isolated noise</label>
 <label class="inline"><input id="denoise" type="checkbox" checked> Light image denoising for segmentation</label>
 <button id="resetROI">Reset object region</button>
 <small style="display:block;margin-top:10px">Automatic passes use at most 8 views and wait at least 8 seconds between starts. Finish uses the selected final budget, sampled across the entire recording.</small>
 <details><summary>Limits and capture tips</summary><p>This is periodic neural reconstruction, not video-rate SLAM. Capture and frame selection continue during background inference. Point-cloud updates arrive whenever a pass finishes.</p>
-<p>Start with 8–16 sharp overlapping angles. Walk around a stationary object. More time recording one unchanged view adds little geometry.</p>
+<p>For manual capture, rotate the item in small steps with overlapping surface detail. Stop moving and remove your hands before each photo. One photo cannot show the hidden sides.</p>
 <p>The model estimates shape and cameras. Scale is arbitrary; unseen parts, shiny surfaces and weak overlap remain difficult. PLY contains colored points, not a watertight surface mesh.</p>
-<p>Low GPU memory: choose 224 pixels and 6 views. CPU mode works but can be much slower. Existing successful results are preserved after failures.</p></details>
+<p>For an 8 GB GPU, start with 224 pixels and 3–4 views per pass. A larger photo set is sampled to your view budget; increase it only if memory permits. Existing successful results are preserved after failures.</p></details>
 </section>
 </aside>
 </main>
@@ -91,6 +96,7 @@ const $=id=>document.getElementById(id),video=$('video'),grab=document.createEle
 let scan=null,health=null,stream=null,ws=null,wsReady=false,capturing=false,inFlight=false,finishPending=false,uploading=false;
 let region=[.1,.08,.9,.92],frameTimer=null,pollTimer=null,mapKey=null,previewFrame=-1,galleryKey='';
 const busy=()=>scan&&['queued','running'].includes(scan.job.state);
+const manual=()=>$('captureMode').value==='manual';
 const base=()=>'/api/scans/'+scan.id;
 function error(s){$('error').textContent=s;}
 async function api(path,options={}){
@@ -101,7 +107,9 @@ async function api(path,options={}){
 function buttons(){
  const finalBusy=scan&&(scan.finish_requested||scan.final_pending)&&busy();
  $('start').disabled=!scan||capturing||finishPending||finalBusy||uploading;
- $('pause').disabled=!capturing;$('save').disabled=!capturing;
+ $('pause').disabled=!capturing;$('save').disabled=!capturing||inFlight||!wsReady||finishPending;
+ $('captureMode').disabled=inFlight||finishPending;
+ $('auto').disabled=manual();
  $('build').disabled=!scan||scan.photos.length<3||busy()||uploading||!health?.vggt.installed;
  $('finish').disabled=!scan||scan.photos.length<3||finishPending||finalBusy||uploading||!health?.vggt.installed;
  $('new').disabled=busy()||inFlight||uploading;
@@ -110,12 +118,12 @@ function buttons(){
  $('loadModel').disabled=['ready','loading'].includes(health?.vggt.state);
 }
 function captureSettings(){
- return {type:'settings',roi:region,background:$('foreground').checked,denoise:$('denoise').checked,preview:$('previewEnabled').checked};
+ return {type:'settings',mode:$('captureMode').value,roi:region,background:$('foreground').checked,denoise:$('denoise').checked,preview:$('previewEnabled').checked};
 }
 async function sendSettings(){
  if(wsReady&&ws?.readyState===1)ws.send(JSON.stringify(captureSettings()));
  else if(scan)try{await api(base()+'/capture-settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(captureSettings())});}catch(e){error(e.message);}
- drawRegion();
+ drawRegion();if(capturing&&manual()&&!inFlight)sendFrame();
 }
 function drawRegion(){
  const canvas=$('roi'),c=canvas.getContext('2d');canvas.width=video.videoWidth||640;canvas.height=video.videoHeight||480;
@@ -130,7 +138,11 @@ $('roi').onpointerup=()=>{if(!drag)return;drag=null;if(region[2]-region[0]<.08||
 $('roi').onpointercancel=()=>{drag=null;};
 $('resetROI').onclick=()=>{region=[.1,.08,.9,.92];sendSettings();};
 function pause(){capturing=false;clearTimeout(frameTimer);$('status').textContent='Capture paused; background reconstruction can continue.';buttons();}
-function scheduleFrame(){clearTimeout(frameTimer);if(capturing&&wsReady&&!inFlight)frameTimer=setTimeout(sendFrame,150);}
+function scheduleFrame(){clearTimeout(frameTimer);if(capturing&&!manual()&&wsReady&&!inFlight)frameTimer=setTimeout(sendFrame,150);}
+function takePhoto(){
+ if(!capturing||!wsReady||inFlight||video.readyState<2||finishPending)return;
+ error('');ws.send('capture');sendFrame();
+}
 function sendFrame(){
  if(!capturing||!wsReady||inFlight)return;if(video.readyState<2){scheduleFrame();return;}
  inFlight=true;buttons();grab.width=Math.min(1280,video.videoWidth);grab.height=Math.round(grab.width*video.videoHeight/video.videoWidth);
@@ -161,7 +173,8 @@ async function start(){
   if(scan.finish_requested){scan=await api(base()+'/resume',{method:'POST'});}
   if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:$('camera').value?{exact:$('camera').value}:undefined,width:{ideal:1280},height:{ideal:720}},audio:false});video.srcObject=stream;await video.play();drawRegion();}
   if(!wsReady)await connect();
-  capturing=true;$('status').textContent='Selecting keyframes while reconstruction runs independently.';buttons();scheduleFrame();
+  capturing=true;$('status').textContent=manual()?'Camera ready. Only Take photo saves an angle; Finish builds your PLY.':'Selecting changed views automatically.';buttons();
+  if(manual())sendFrame();else scheduleFrame();
  }catch(e){error(e.message);buttons();}
 }
 async function finish(){
@@ -173,6 +186,7 @@ function resultBase(job){return base()+'/results/'+job;}
 function render(){
  $('auto').checked=scan.auto;
  $('saved').textContent=scan.photos.length+' / 200';$('processed').textContent=scan.processed;
+ $('maskTip').textContent=scan.options.turntable?'Rotating-item mode masks the background before reconstruction. Check that the latest mask includes the entire item.':'The foreground mask filters the output cloud; full images feed the reconstruction model.';
  $('progress').value=scan.job.progress;$('buildStatus').textContent=scan.job.message;
  const latest=scan.latest_result;
  if(latest&&mapKey!==latest.id){
@@ -180,6 +194,7 @@ function render(){
   api(resultBase(latest.id)+'/preview.json').then(data=>{if(scan.id!==scanId||scan.latest_result?.id!==latest.id)return;mergedViewer.set(data.points);}).catch(e=>{mapKey=null;error(e.message);});
  }
  if(latest)$('mapNote').textContent=latest.points.toLocaleString()+' points · '+latest.frame_ids.length+' of '+latest.captured_views+' saved views used · '+(latest.final?'final pass':'periodic pass')+(scan.revision>latest.revision?' · newer views/settings waiting':'');
+ else $('mapNote').textContent=scan.photos.length<3?'Take at least three different overlapping angles, then click Finish & export PLY.':'Ready to build from '+Math.min(scan.photos.length,scan.options.max_views)+' of '+scan.photos.length+' photos. Click Finish & export PLY.';
  $('downloads').replaceChildren();
  const job=latest?.id||(scan.job.state==='failed'?scan.job.id:null);
  const labels=latest?{'merged.ply':'Download merged PLY','results.zip':'Download all results','report.json':'Reconstruction report','cameras.json':'Estimated cameras'}:{'reconstruction.log':'Failure log','report.json':'Failure report'};
@@ -218,10 +233,19 @@ async function pollHealth(){
 async function settingsChanged(){
  $('confValue').textContent=$('confidence').value+'%';if(!scan)return;
  const body={max_views:Number($('views').value),image_size:Number($('size').value),confidence:Number($('confidence').value),
-  consistency:$('consistency').checked,cleanup:$('cleanup').checked,foreground:$('foreground').checked,auto:$('auto').checked,interval:8};
+  consistency:$('consistency').checked,cleanup:$('cleanup').checked,foreground:$('foreground').checked,turntable:$('turntable').checked,auto:!manual()&&$('auto').checked,interval:8};
  try{scan=await api(base()+'/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});render();sendSettings();}catch(e){error(e.message);}
 }
-for(const id of ['views','size','confidence','consistency','cleanup','foreground','auto'])$(id).onchange=settingsChanged;
+for(const id of ['views','size','confidence','consistency','cleanup','auto'])$(id).onchange=settingsChanged;
+$('turntable').onchange=()=>{if($('turntable').checked)$('foreground').checked=true;return settingsChanged();};
+$('foreground').onchange=()=>{if(!$('foreground').checked&&$('turntable').checked){$('foreground').checked=true;error('Rotating-item mode needs Object-only cloud. Disable Fixed camera / rotating item first.');return;}return settingsChanged();};
+$('captureMode').onchange=async()=>{
+ clearTimeout(frameTimer);if(manual())$('auto').checked=false;
+ $('captureTip').textContent=manual()?'Keep the camera fixed. Rotate the item a little, remove your hands, then take the next photo.':'New changed views are saved automatically. You can also click Take photo.';
+ await sendSettings();await settingsChanged();
+ $('status').textContent=manual()?'Only Take photo saves an angle. Finish builds the PLY.':'Changed views will be selected automatically.';
+ scheduleFrame();buttons();
+};
 $('denoise').onchange=sendSettings;
 $('previewEnabled').onchange=async()=>{if($('previewEnabled').checked)try{await api('/api/models/preview/load',{method:'POST'});}catch(e){error(e.message);}sendSettings();};
 async function newScan(){
@@ -232,10 +256,12 @@ async function newScan(){
 function restoreSettings(){
  const o=scan.options,c=scan.capture_settings;region=c.roi;$('foreground').checked=o.foreground;$('denoise').checked=c.denoise;$('previewEnabled').checked=c.preview;
  $('auto').checked=scan.auto;$('views').value=String(o.max_views);$('size').value=String(o.image_size);$('confidence').value=o.confidence;
+ $('captureMode').value=c.mode||'auto';$('turntable').checked=!!o.turntable;
+ $('captureTip').textContent=manual()?'Keep the camera fixed. Rotate the item a little, remove your hands, then take the next photo.':'Changed views are saved automatically. Click Take photo to keep a specific angle.';
  $('confValue').textContent=o.confidence+'%';$('consistency').checked=o.consistency;$('cleanup').checked=o.cleanup;
 }
 $('loadModel').onclick=async()=>{error('');try{health.vggt=await api('/api/models/vggt/load',{method:'POST'});buttons();}catch(e){error(e.message);}};
-$('start').onclick=start;$('pause').onclick=pause;$('save').onclick=()=>{if(wsReady)ws.send('capture');};$('finish').onclick=finish;$('new').onclick=newScan;
+$('start').onclick=start;$('pause').onclick=pause;$('save').onclick=takePhoto;$('finish').onclick=finish;$('new').onclick=newScan;
 $('build').onclick=async()=>{error('');try{scan=await api(base()+'/build',{method:'POST'});render();}catch(e){error(e.message);}};
 $('cancel').onclick=async()=>{try{scan=await api(base()+'/cancel',{method:'POST'});$('auto').checked=false;render();}catch(e){error(e.message);}};
 $('upload').onclick=()=>$('files').click();

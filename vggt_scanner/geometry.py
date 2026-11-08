@@ -7,7 +7,7 @@ from scipy.spatial import cKDTree
 from depth_cloud import write_ply, sample_cloud
 
 
-def prepare_inputs(paths, mask_paths, size=336, foreground=True):
+def prepare_inputs(paths, mask_paths, size=336, foreground=True, isolate=False):
     if size not in (224,336,518): raise ValueError("Use an input size of 224, 336 or 518.")
     images, masks, transforms = [], [], []
     for path, mask_path in zip(paths,mask_paths):
@@ -20,6 +20,8 @@ def prepare_inputs(paths, mask_paths, size=336, foreground=True):
         rgb=np.full((size,size,3),255,np.uint8)
         rgb[top:top+nh,left:left+nw]=np.array(image.resize((nw,nh),Image.Resampling.BICUBIC))
         mask=np.zeros((size,size),bool)
+        if isolate and (not foreground or not mask_path or not Path(mask_path).is_file()):
+            raise ValueError("Rotating-item reconstruction needs a foreground mask for every selected photo.")
         if foreground and mask_path and Path(mask_path).is_file():
             original=cv2.imread(str(mask_path),cv2.IMREAD_GRAYSCALE)
             if original is None: raise ValueError("Cannot read foreground mask.")
@@ -27,6 +29,10 @@ def prepare_inputs(paths, mask_paths, size=336, foreground=True):
             resized=cv2.erode(resized.astype(np.uint8),np.ones((3,3),np.uint8))>0
         else: resized=np.ones((nh,nw),bool)
         mask[top:top+nh,left:left+nw]=resized
+        if isolate:
+            if mask.sum()<25: raise ValueError("A selected photo has an empty foreground mask. Adjust the object rectangle and retake it.")
+            # Keep framing/intrinsics fixed; remove stationary room features for rotated objects.
+            rgb[~mask]=255
         images.append(rgb);masks.append(mask)
         transforms.append(dict(width=width,height=height,resized_width=nw,resized_height=nh,
                                left=left,top=top,scale_x=nw/width,scale_y=nh/height))
