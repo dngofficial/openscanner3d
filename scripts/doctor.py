@@ -11,6 +11,7 @@ import sys
 
 from backend.app.config import ROOT, load_settings, project_path, resolve_tool
 from backend.app.network import certificate_addresses, lan_addresses
+from scripts.make_cert import find_mkcert
 from backend.app.reconstruction import colmap_help
 
 
@@ -54,7 +55,7 @@ def inspect_machine() -> dict:
     certified = certificate_addresses(settings)
     cert_ok = project_path(settings.tls_cert).is_file() and project_path(settings.tls_key).is_file()
     phone = {"lan": settings.lan, "port": settings.port, "addresses": addresses, "certificate": cert_ok,
-             "certificate_addresses": certified, "mkcert": shutil.which("mkcert")}
+             "certificate_addresses": certified, "mkcert": find_mkcert()}
     phone["ok"] = settings.lan and cert_ok and bool(addresses) and (certified is None or addresses[0] in certified)
     return {
         "phone_connection": phone,

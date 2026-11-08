@@ -7,7 +7,9 @@ Install the printed root certificate (public, no private key) on the phone once.
 Usage: .venv/Scripts/python.exe -m scripts.make_cert
 Rerun it whenever the laptop's Wi-Fi address changes.
 """
+import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -18,6 +20,21 @@ from backend.app.config import load_settings, project_path
 from backend.app.network import lan_addresses
 
 
+def find_mkcert(explicit: str | None = None) -> str | None:
+    """PATH first, then winget's install folders (winget's portable installs are often not on PATH)."""
+    if explicit:
+        return explicit if Path(explicit).is_file() else None
+    found = shutil.which("mkcert")
+    if found or not os.environ.get("LOCALAPPDATA"):
+        return found
+    winget = Path(os.environ["LOCALAPPDATA"], "Microsoft", "WinGet")
+    for pattern in ("Links/mkcert.exe", "Packages/FiloSottile.mkcert_*/mkcert*.exe"):
+        matches = sorted(winget.glob(pattern))
+        if matches:
+            return str(matches[-1])
+    return None
+
+
 def run(command: list[str]) -> str:
     result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     if result.returncode:
@@ -26,11 +43,13 @@ def run(command: list[str]) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--mkcert", help="Path to mkcert.exe if it is not found automatically.")
+    args = parser.parse_args()
     settings = load_settings()
-    mkcert = shutil.which("mkcert")
+    mkcert = find_mkcert(args.mkcert)
     if not mkcert:
-        sys.exit("mkcert is not installed. Install it (for example: winget install FiloSottile.mkcert), "
-                 "open a new PowerShell window, and run this again.")
+        sys.exit(r"mkcert not found. Install it (winget install FiloSottile.mkcert) or pass --mkcert C:\path\to\mkcert.exe.")
     addresses = lan_addresses()
     if not addresses:
         sys.exit("No private network address found. Connect this laptop to the Wi-Fi the phone will use.")
