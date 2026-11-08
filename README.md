@@ -21,7 +21,9 @@ The default `capture` mode uses CPU OpenCV and saves frames without running reco
 
 1. **Start camera** opens a local live preview. It saves nothing.
 2. Frame the stationary object, then press **Start scan**. Accepted frames appear in **Last saved photo** beside the live preview.
-3. Move in small steps with the whole object visible. Automatic capture requires adequate sharpness/exposure and spatially distributed, geometrically consistent matches with the last saved image. These are tunable scene-continuity heuristics, not object-specific coverage measurements.
+3. Move in small steps with the whole object visible. Automatic capture requires adequate exposure, sharpness and contrast, and spatially distributed, geometrically consistent matches with the last saved image. These are tunable scene-continuity heuristics, not object-specific coverage measurements.
+
+   The quality checks run in this order: exposure, then sharpness, then contrast. A rejected frame reports only the first check that failed, with its measured value. Exposure fails only when more than 35% of pixels are pure white or pure black, or the average brightness is below 20/255. A bright table or a dark object is not rejected for its average brightness alone. Sharpness (Laplacian variance) must be at least 25, and contrast at least 12. The thresholds are in `backend/app/capture_quality.py`.
 4. **Pause** stops saving while the local preview stays visible. Resume after returning toward the last accepted view. One already-submitted frame may finish before the pause acknowledgement; no later frames are accepted while paused.
 5. **Finish & review** stops saving and opens thumbnails. Uncheck unrelated, obstructed, or moved-object frames. Imports go through this same review step, but do not receive automatic continuity validation.
 6. **Confirm selected photos** requires at least 12 distinct frames. It freezes an input snapshot and settings; originals and excluded files remain unchanged. Capture mode offers `reviewed-images.zip`; reconstruction mode processes only the snapshot.
@@ -38,7 +40,7 @@ Use the same route for either phone:
 
 See [the Samsung/Camo guide](docs/PHONE_SETUP.md). Camo documents Android support on Windows, but a physical Galaxy S26 Ultra capture has not been verified here. Keep the laptop server on localhost for this route. Opening localhost on a phone addresses the phone, not the laptop.
 
-For photos already on disk, choose **Import photos**. JPEG, PNG, and WebP are accepted (HEIC is not). Limits: 100 files per selection, 25 MB per file, at most 16 megapixels and 8192 pixels per side. Original imported bytes are retained in `scans/<id>/originals/`; orientation-normalized working JPEGs (maximum long edge 1280) are stored in `images/`. Use one camera/lens and consistent resolution/orientation per scan. The server rejects changes in working dimensions instead of silently reusing incorrect calibration. Camo camera frames are stored as received browser JPEGs.
+For photos already on disk, choose **Import photos**. JPEG, PNG, and WebP are accepted (HEIC is not). Limits: 100 files per selection, 25 MB per file, at most 16 megapixels and 8192 pixels per side. Original imported bytes are retained in `scans/<id>/originals/`; orientation-normalized working JPEGs (maximum long edge 3200, so a 12 MP photo keeps most of its detail) are stored in `images/`. COLMAP's `quality` preset downsamples again internally, so use `medium` or `high` on the partner laptop to benefit from imported photos; check `colmap.log` for the size it actually used. Use one camera/lens and consistent resolution/orientation per scan. The server rejects changes in working dimensions instead of silently reusing incorrect calibration. Camo camera frames are stored as received browser JPEGs.
 
 ## Partner GPU build
 

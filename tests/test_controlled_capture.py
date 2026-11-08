@@ -10,6 +10,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from backend.app import main as server
+from backend.app.capture_quality import frame_problem
 from backend.app.config import Settings
 
 
@@ -70,6 +71,27 @@ class ControlledCaptureTests(unittest.TestCase):
             scan.force_capture = True
             self.assertFalse(scan.process(jpeg(cv2.GaussianBlur(original, (51,51), 15)))['accepted'])
             self.assertEqual(len(scan.photos), 2)
+
+    def test_quality_rejections_name_one_specific_cause(self):
+        gray = lambda image: cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        def problem(image):
+            g = gray(image)
+            return frame_problem(g, cv2.Laplacian(g, cv2.CV_64F).var(), g.std())
+        # A bright white table (mean well above the old 225 cutoff) is fine while it is not clipped.
+        noise = np.random.default_rng(3).normal(232, 14, (540, 960, 1))
+        bright = np.repeat(np.clip(noise, 0, 249), 3, axis=2).astype(np.uint8)
+        self.assertGreater(gray(bright).mean(), 225)
+        self.assertIsNone(problem(bright))
+        self.assertIsNone(problem(textured()))
+        clipped = textured(); clipped[:, :500] = 255
+        self.assertTrue(problem(clipped).startswith('Overexposed: 52%'))
+        crushed = textured(); crushed[:, :500] = 0
+        self.assertTrue(problem(crushed).startswith('Underexposed'))
+        self.assertTrue(problem(np.full((540, 960, 3), 12, np.uint8)).startswith('Too dark'))
+        blurry = problem(cv2.GaussianBlur(textured(), (51, 51), 15))
+        self.assertTrue(blurry.startswith('Blurry (sharpness'))
+        self.assertNotIn('exposure', blurry)
+        self.assertTrue(problem(np.full((540, 960, 3), 128, np.uint8)).startswith('Blurry'))
 
     def test_confirm_snapshots_only_selected_and_keeps_excluded_originals(self):
         scan = server.Scan()

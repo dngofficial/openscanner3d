@@ -16,14 +16,14 @@ from fastapi.responses import FileResponse
 from .config import load_settings, resolve_tool
 from .reconstruction import reconstruct
 from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
-from .capture_quality import continuity
+from .capture_quality import continuity, exposure_problem, frame_problem
 from .masks import region_mask
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
 SETTINGS = load_settings()
 AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
-KF_DEG, MIN_BLUR = 6, 25             # new keyframe every 6 deg of orbit; Laplacian var floor
+KF_DEG = 6                           # new keyframe every 6 deg of orbit
 bf = cv2.BFMatcher(cv2.NORM_L2)
 app = FastAPI()
 
@@ -168,8 +168,8 @@ class Scan:
                "Move back. The object is filling the frame." if s.size > .8 else None
 
     # ---- per frame --------------------------------------------------------
-    def decode(s, jpg):
-        full, shape = decode_jpeg(jpg, s.frame_shape)
+    def decode(s, jpg, max_bytes=MAX_FRAME_BYTES):
+        full, shape = decode_jpeg(jpg, s.frame_shape, max_bytes)
         s.frame_shape = shape
         return full
 
@@ -179,7 +179,7 @@ class Scan:
             return s.fb("Pause capture before importing photos, or start a new scan after completion.", "bad", accepted=False)
         try:
             normalized, suffix = normalize_photo(jpg)
-            s.decode(normalized)
+            s.decode(normalized, MAX_UPLOAD_BYTES)
         except (ValueError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
             return s.fb(str(error), "bad", accepted=False)
         if len(s.photos) >= SETTINGS.max_photos:
@@ -226,18 +226,14 @@ class Scan:
         s.visual_features(xy, d, W, H)
         info = dict(blur=blur, feats=len(kp), brightness=brightness, contrast=contrast)
         if d is None or len(kp) < 40:
-            if brightness < 35:
-                msg = f"Frame is dark ({brightness}/255); increase illumination or exposure."
-            elif brightness > 225:
-                msg = f"Frame is overexposed ({brightness}/255); reduce exposure or glare."
-            else:
-                msg = f"Only {len(kp)} trackable features (need 40). Focus on a detailed matte object; include nearby textured surroundings."
+            msg = exposure_problem(g) or f"Only {len(kp)} trackable features (need 40). Focus on a detailed matte object; include nearby textured surroundings."
             s.capture_note = msg
             return s.fb(msg, "warn", **info)
-        if blur < MIN_BLUR or brightness < 35 or brightness > 225 or contrast < 12:
+        problem = frame_problem(g, blur, contrast)
+        if problem:
             s.force_capture = False
-            s.capture_note = "Frame too soft, dark, bright, or low-contrast. Hold steady and check lighting."
-            return s.fb(s.capture_note, "warn", **info)
+            s.capture_note = problem
+            return s.fb(problem, "warn", **info)
         info["quality"] = "Frame passed initial quality checks"
         s.save_view(xy, d, jpg, g)
 

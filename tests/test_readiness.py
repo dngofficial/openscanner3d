@@ -67,6 +67,17 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_photo(data.getvalue())
 
+    def test_import_keeps_twelve_megapixel_detail(self):
+        rng = np.random.default_rng(1)
+        data = io.BytesIO()
+        Image.fromarray(rng.integers(0, 255, (3000, 4000, 3), dtype=np.uint8)).save(data, format='JPEG', quality=95)
+        normalized, _ = normalize_photo(data.getvalue())
+        self.assertGreater(len(normalized), 5 * 1024 * 1024)  # Noise is a worst case for JPEG size.
+        with Image.open(io.BytesIO(normalized)) as working:
+            self.assertEqual(working.size, (3200, 2400))
+        scan = server.Scan()
+        self.assertTrue(scan.import_photo(data.getvalue())['accepted'])
+
 
 class CaptureTests(unittest.TestCase):
     def setUp(self):

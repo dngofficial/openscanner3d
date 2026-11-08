@@ -2,6 +2,32 @@
 import cv2
 import numpy as np
 
+MIN_SHARPNESS, MIN_CONTRAST, MAX_CLIPPED, MIN_MEAN = 25, 12, .35, 20
+
+
+def exposure_problem(gray):
+    """Judge exposure by clipped pixels, not the mean: a white table or dark object can still be well exposed."""
+    bright, dark, mean = (gray >= 250).mean(), (gray <= 5).mean(), gray.mean()
+    if bright > MAX_CLIPPED:
+        return f"Overexposed: {bright:.0%} of the frame is pure white. Lower exposure or angle away from glare."
+    if dark > MAX_CLIPPED:
+        return f"Underexposed: {dark:.0%} of the frame is pure black. Add light or raise exposure."
+    if mean < MIN_MEAN:
+        return f"Too dark (average brightness {mean:.0f}/255). Add light or raise exposure."
+    return None
+
+
+def frame_problem(gray, sharpness, contrast):
+    """Return the single most relevant reason to reject a frame, or None."""
+    exposure = exposure_problem(gray)
+    if exposure:
+        return exposure
+    if sharpness < MIN_SHARPNESS:
+        return f"Blurry (sharpness {sharpness:.0f}, need {MIN_SHARPNESS}). Hold steady or wait for focus."
+    if contrast < MIN_CONTRAST:
+        return f"Low contrast ({contrast:.0f}, need {MIN_CONTRAST}). Add side lighting or a textured surface."
+    return None
+
 
 def continuity(previous_xy, previous_descriptors, xy, descriptors, width, height):
     pairs = cv2.BFMatcher(cv2.NORM_L2).knnMatch(previous_descriptors, descriptors, k=2)
