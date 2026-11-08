@@ -6,7 +6,7 @@ holding
 scans/
 /sample-data/
 /data/
-
+/vggt_scanner/model_cache/
 # Local configuration, certificates and keys (scripts/make_cert.py writes to certs/)
 /config.local.toml
 .env
