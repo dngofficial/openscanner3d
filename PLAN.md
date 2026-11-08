@@ -35,6 +35,7 @@ This is progress within the existing plan, not a replacement roadmap. The captur
 - [x] Background reconstruction job with atomic `job.json`, 2 s polling, real stage names (including COLMAP's own log headings), process-tree cancellation, reattach after reload, interrupted-on-restart, Results list and labelled saved fallback (`scripts/mark_fallback.py`). Checked in the browser with a fake COLMAP script.
 - [x] Three.js viewer (vendored 0.170.0, no CDN) with rotate, zoom, pan, model switching and downloads. Checked in the browser with synthetic textured and vertex-coloured GLBs.
 - [x] OpenMVS texturing adapter (InterfaceCOLMAP + TextureMesh, option checks, UV-safe cleanup) and textured GLB export (Blender script, trimesh fallback, texture validated on reload). Orchestration tested; not yet run with real OpenMVS or Blender.
+- [x] Relax orbit continuity for 3D scenes: mutual ratio-0.8 matches with fundamental-matrix verification instead of a homography, and a larger step limit. Measured on real frames: 2/3/4-step pairs accepted 93/76/60% (was 69/38/27%); 0 of 150 wrong-scene pairs accepted.
 - [ ] Validate object masks and isolation on a real COLMAP reconstruction (partner laptop), for both a turned-object capture and an orbit capture.
 - [ ] Recapture with a full orbit at 2–3 heights. The first reviewed set covers only about 90–120° of a dark, low-texture object.
 - [ ] Rehearse the new controls with Samsung/Camo on a stationary textured object; measure acceptance/rejection behavior and tune thresholds if necessary.
