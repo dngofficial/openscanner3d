@@ -45,6 +45,37 @@ class ReconstructionTests(unittest.TestCase):
             self.assertIn('Object reconstruction failed', result['msg'])
             self.assertFalse((output / 'object.glb').exists())
 
+    def test_empty_poisson_mesh_still_runs_object_step(self):
+        def empty_mesh(command, log, timeout):
+            workspace = Path(command[command.index('--workspace_path') + 1])
+            (workspace / 'sparse/0').mkdir(parents=True)
+            (workspace / 'sparse/0/images.bin').write_bytes(b'poses')
+            target = workspace / 'dense/0/meshed-poisson.ply'
+            target.parent.mkdir(parents=True)
+            target.write_text('ply\nformat ascii 1.0\nelement vertex 0\nproperty float x\nproperty float y\n'
+                              'property float z\nelement face 0\nproperty list uchar int vertex_indices\nend_header\n')
+            return 0
+        info = dict(photos=30, faces=100, clipped=False, warnings=[], masks={}, game_asset=None)
+        for object_ok in (True, False):
+            with self.subTest(object_ok=object_ok), tempfile.TemporaryDirectory() as root:
+                output = Path(root)
+                (output / 'mesh.glb').write_bytes(b'older scene')
+                (output / 'object.glb').write_bytes(b'older object')
+                step = dict(return_value=info) if object_ok else dict(side_effect=ValueError('no table'))
+                with patch.object(reconstruction, 'resolve_tool', return_value='colmap'), \
+                     patch.object(reconstruction, 'colmap_help'), \
+                     patch.object(reconstruction, 'run_logged', side_effect=empty_mesh), \
+                     patch.object(reconstruction, 'object_step', **step):
+                    result = reconstruction.reconstruct(output / 'images', output, Settings(mode='reconstruct'))
+                self.assertIn('Scene mesh skipped', result['msg'])
+                if object_ok:
+                    self.assertTrue(result['model_ready'])
+                    self.assertFalse((output / 'mesh.glb').exists())  # Not paired with the new object.
+                else:
+                    self.assertFalse(result['done'])
+                    self.assertEqual((output / 'mesh.glb').read_bytes(), b'older scene')
+                    self.assertEqual((output / 'object.glb').read_bytes(), b'older object')
+
     def test_missing_executable_and_exclusive_execution(self):
         with patch.object(reconstruction, 'resolve_tool', return_value=None):
             result = reconstruction.reconstruct(Path('images'), Path('output'), Settings(mode='reconstruct'))

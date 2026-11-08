@@ -113,6 +113,30 @@ def run_logged(command: list[str], log_path: Path, timeout: int) -> int:
             raise
 
 
+def export_scene_mesh(workspace: Path) -> str | None:
+    """Write workspace/mesh.{obj,glb} from COLMAP's Poisson mesh. Returns why it could not, or None.
+
+    Plain, low-texture objects often leave dense stereo with almost no points, so Poisson writes an empty
+    or degenerate mesh. That is not fatal: the object step only needs the sparse camera poses.
+    """
+    import numpy as np
+    import trimesh
+    mesh_path = workspace / "dense" / "0" / "meshed-poisson.ply"
+    if not mesh_path.is_file():
+        return "COLMAP wrote no dense Poisson mesh (check colmap.log and the build's CUDA support)."
+    try:
+        mesh = trimesh.load(mesh_path, force="mesh")
+        if not isinstance(mesh, trimesh.Trimesh) or not len(mesh.faces) or not np.isfinite(mesh.vertices).all():
+            return "COLMAP's dense Poisson mesh is empty (too little surface texture for dense stereo)."
+        for extension in ("obj", "glb"):
+            mesh.export(workspace / f"mesh.{extension}")
+        if not len(trimesh.load(workspace / "mesh.glb", force="mesh").faces):
+            return "The exported scene GLB contains no faces."
+    except Exception as error:  # A truncated or empty PLY can fail in many ways inside the parser.
+        return f"COLMAP's dense Poisson mesh could not be read ({type(error).__name__})."
+    return None
+
+
 def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
     if settings.mode != "reconstruct":
         return dict(msg="Capture-only mode: photos saved. Run reconstruction on the partner's GPU laptop.", lvl="ok", done=True, model_ready=False)
@@ -132,37 +156,36 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         code = run_logged(command, output / "colmap.log", settings.timeout_seconds)
         if code:
             return dict(msg=f"COLMAP exited with code {code}. See colmap.log.", lvl="bad", done=False)
-        mesh_path = workspace / "dense" / "0" / "meshed-poisson.ply"
-        if not mesh_path.is_file():
-            return dict(msg="No dense Poisson mesh was produced. Inspect colmap.log and the installed backend's GPU support.", lvl="bad", done=False)
         import numpy as np
-        import trimesh
-        mesh = trimesh.load(mesh_path, force="mesh")
-        if not isinstance(mesh, trimesh.Trimesh) or not len(mesh.faces) or not np.isfinite(mesh.vertices).all():
-            raise ValueError("COLMAP output is not a nonempty finite triangle mesh")
-        for extension in ("obj", "glb"):
-            destination = workspace / f"mesh.{extension}"
-            mesh.export(destination)
-        reloaded = trimesh.load(workspace / "mesh.glb", force="mesh")
-        if not len(reloaded.faces):
-            raise ValueError("Exported GLB contains no faces")
-        for extension in ("obj", "glb"):
-            os.replace(workspace / f"mesh.{extension}", output / f"mesh.{extension}")
-        message = "Scene mesh exported (COLMAP dense + Poisson)."
-        (output / "run.json").write_text(json.dumps(dict(run=workspace.name)), encoding="utf-8")
-        for name in (*OBJECT_FILES, "object.json"):
-            (output / name).unlink(missing_ok=True)
-        shutil.rmtree(output / PREVIEWS, ignore_errors=True)
+        scene_error = export_scene_mesh(workspace)
+        if scene_error and not (workspace / "sparse" / "0" / "images.bin").is_file():
+            return dict(msg=f"{scene_error} COLMAP also produced no camera poses (sparse/0). See colmap.log.",
+                        lvl="bad", done=False)
+        if not scene_error:
+            # The scene stands on its own, so it replaces older outputs before the object step runs.
+            for extension in ("obj", "glb"):
+                os.replace(workspace / f"mesh.{extension}", output / f"mesh.{extension}")
+            (output / "run.json").write_text(json.dumps(dict(run=workspace.name)), encoding="utf-8")
+            for name in (*OBJECT_FILES, "object.json"):
+                (output / name).unlink(missing_ok=True)
+            shutil.rmtree(output / PREVIEWS, ignore_errors=True)
+        message = f"Scene mesh skipped: {scene_error}" if scene_error else "Scene mesh exported (COLMAP dense + Poisson)."
         try:
             # Plain objects give dense stereo little to work with; their outlines still define the shape.
             info = object_step(workspace, images, output, settings, settings.detail)
-            return dict(msg=f"{message} {describe_object(info)}",
-                        lvl="warn" if info["clipped"] or info.get("warnings") else "ok",
-                        done=True, model_ready=True, object=info)
         except (ValueError, OSError, np.linalg.LinAlgError) as error:
+            if scene_error:  # Nothing new to show: leave any earlier outputs exactly as they were.
+                return dict(msg=f"{message} Object reconstruction failed: {error}.", lvl="bad", done=False)
             for name in (*OBJECT_FILES, "object.json"):
                 (output / name).unlink(missing_ok=True)  # Never pair a new scene with an old object.
             return dict(msg=f"{message} Object reconstruction failed: {error}.", lvl="warn", done=True, model_ready=True)
+        if scene_error:
+            for extension in ("obj", "glb"):
+                (output / f"mesh.{extension}").unlink(missing_ok=True)  # Never pair a new object with an old scene.
+            (output / "run.json").write_text(json.dumps(dict(run=workspace.name)), encoding="utf-8")
+        return dict(msg=f"{message} {describe_object(info)}",
+                    lvl="warn" if scene_error or info["clipped"] or info.get("warnings") else "ok",
+                    done=True, model_ready=True, object=info)
     except subprocess.TimeoutExpired:
         return dict(msg="Reconstruction timed out; its process tree was stopped. Photos remain available.", lvl="bad", done=False)
     finally:

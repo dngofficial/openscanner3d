@@ -319,11 +319,18 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     cameras, model_images = read_cameras(sparse / "cameras.bin"), read_images(sparse / "images.bin")
     if len(model_images) < 6:
         raise ValueError(f"Only {len(model_images)} photos registered; at least 6 are needed")
+    points = read_points3d(sparse / "points3D.bin") if (sparse / "points3D.bin").is_file() else np.empty((0, 3))
     if (dense / "fused.ply").is_file():
         import trimesh
-        points = np.asarray(trimesh.load(dense / "fused.ply").vertices)
-    else:
-        points = read_points3d(sparse / "points3D.bin")
+        try:
+            fused = np.asarray(trimesh.load(dense / "fused.ply").vertices, dtype=float).reshape(-1, 3)
+        except Exception:  # Empty or truncated PLY when dense stereo found nothing.
+            fused = np.empty((0, 3))
+        fused = fused[np.isfinite(fused).all(1)]
+        if len(fused) >= len(points):  # Dense stereo can come out sparser than SfM on plain scenes.
+            points = fused
+    if len(points) < 50:
+        raise ValueError(f"Only {len(points)} 3D points reconstructed; too few to find the table")
     scene = Scene(cameras, model_images, points)
     photos = {image["name"]: cv2.imread(str(images / image["name"])) for image in model_images}
     missing = [name for name, photo in photos.items() if photo is None]
