@@ -29,26 +29,50 @@
   dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:4px 12px; color:var(--dim); } dd { margin:0; color:var(--ink); text-align:right; }
   .row { display:flex; gap:8px; } .row button { flex:1; }
   small { color:var(--dim); }
+  .comparison { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .comparison > div { min-width:0; }
+  #lastSaved { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; }
+  #reviewGrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; margin:16px 0; }
+  #reviewGrid label { display:block; padding:8px; border:1px solid #50545a; border-radius:5px; }
+  #reviewGrid img { width:100%; aspect-ratio:4/3; object-fit:contain; display:block; }
+  #reviewGrid label:has(input:not(:checked)) { opacity:.45; }
+  button:disabled { opacity:.45; cursor:default; }
+  [hidden] { display:none !important; }
+  @media (max-width:860px) { .comparison { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
 <main>
-<h2>Live camera</h2>
+<div class="comparison"><div><h2>Live preview</h2>
 <div class="stage">
   <video id="v" autoplay playsinline muted></video>
   <div id="banner">Connecting to scanner…</div>
 </div>
+</div><div><h2>Last saved photo</h2>
+<img id="lastSaved" alt="Last accepted view for comparison" hidden>
+<p id="lastSavedStatus">Nothing saved. Frame the stationary object, then press Start scan.</p>
+</div></div>
+<section id="reviewPanel" class="processed" hidden>
+  <h2>Review before processing</h2>
+  <p>Uncheck setup shots, blocked views, and frames where the object moved. Excluded files stay on disk.</p>
+  <p>Keep consecutive views of the same stationary object. Selecting 12 photos alone does not establish enough overlap.</p>
+  <div class="row"><button id="selectAll">Select all</button><button id="selectNone">Clear selection</button></div>
+  <div id="reviewGrid"></div>
+  <p id="selectionCount" role="status"></p>
+  <button id="confirmSelection" class="go">Confirm selected photos</button>
+</section>
 <section class="processed">
+<details><summary>Tracking diagnostics (optional)</summary>
   <h2>Processed camera · latest analyzed frame</h2>
   <canvas id="processed" width="960" height="540" aria-label="Camera frame with feature bounding box, detected points and feature motion"></canvas>
   <div class="toggles">
-    <label><input id="showBox" type="checkbox" checked> Feature box</label>
-    <label><input id="showPoints" type="checkbox" checked> Features</label>
-    <label><input id="showTrails" type="checkbox" checked> Motion trails</label>
+    <label><input id="showBox" type="checkbox"> Feature box</label>
+    <label><input id="showPoints" type="checkbox"> Features</label>
+    <label><input id="showTrails" type="checkbox"> Motion trails</label>
   </div>
   <p class="legend">Amber box: central 90% of detected features. Cyan dots: image features. Amber lines: candidate matches from the previous frame. Green dots: accepted pose inliers.</p>
   <p class="legend">The box shows feature spread, not an identified object. Background features may be included.</p>
-</section>
+</details></section>
 </main>
 <aside>
   <small id="mode">Connecting…</small>
@@ -56,6 +80,8 @@
   <select id="cam" aria-label="Camera"></select>
   <div class="row"><button id="startCamera">Start camera</button><button id="refreshCameras">Refresh cameras</button></div>
   <small id="cameraStatus" role="status">Camera is stopped.</small>
+  <strong id="scanState" role="status">Preview · not saving</strong>
+  <div class="row"><button id="startScan" class="go">Start scan</button><button id="pauseScan">Pause</button></div>
   <label>Import photos <input id="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
   <small id="importStatus" role="status"></small>
   <canvas id="dome" width="240" height="240" aria-label="Coverage map"></canvas>
@@ -64,11 +90,11 @@
     <dt>Saved photos</dt><dd id="kfs">0</dd><dt>Tracked views</dt><dd id="tracked">0</dd><dt>Live tracking</dt><dd id="tracking">Initializing</dd><dt>Map points</dt><dd id="pts">0</dd>
     <dt>Features (need 40)</dt><dd id="feats">–</dd><dt>Brightness / 255</dt><dd id="brightness">–</dd><dt>Sharpness</dt><dd id="blur">–</dd><dt>Object in frame</dt><dd id="size">–</dd>
   </dl>
-  <small id="capture_status">Move slowly around the object to save different views.</small>
+  <small id="capture_status">Preview does not save photos. Press Start scan when the object is framed.</small>
   <small id="quality"></small>
   <button id="capture">Capture this view</button>
   <div id="downloads"></div>
-  <div class="row"><button id="reset">Start over</button><button id="finish" class="go">Finish</button></div>
+  <div class="row"><button id="reset">New scan</button><button id="finish" class="go">Finish & review</button></div>
 </aside>
 
 <script type="module">
@@ -79,6 +105,50 @@ let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
 let lastOverlay = null, analyzedFrame = document.createElement("canvas"), previousSavedCount = 0, savedFlash = false;
 let inFlight = false, command = null, timer = null, scanId = null, stopped = false;
 let cameraStarting = false, importReady = false, importQueue = [], importFailures = 0;
+let captureState = 'preview', reviewPhotos = [], selectedPhotos = new Set(), lastSavedName = null;
+
+function updateControls() {
+  const connected = ws?.readyState === WebSocket.OPEN;
+  const busy = !!command || importReady || importQueue.length > 0 || cameraStarting;
+  $('scanState').textContent = ({preview:'Preview · not saving', capturing:'Scanning · saving accepted views', paused:'Paused · not saving', review:'Review · not saving', processing:'Processing selection', finished:'Finished'})[captureState] || captureState;
+  $('startScan').textContent = previousSavedCount ? 'Resume scan' : 'Start scan';
+  $('startScan').disabled = !connected || !stream || busy || ['capturing','processing','finished'].includes(captureState);
+  $('pauseScan').disabled = !connected || busy || captureState !== 'capturing';
+  $('capture').disabled = !connected || busy || captureState !== 'capturing';
+  $('finish').disabled = !connected || busy || previousSavedCount === 0 || captureState === 'processing';
+  $('photos').disabled = !connected || busy || ['capturing','processing','finished'].includes(captureState);
+  $('confirmSelection').disabled = !connected || busy || captureState !== 'review' || selectedPhotos.size < 12;
+  $('selectAll').disabled = busy || captureState !== 'review';
+  $('selectNone').disabled = busy || captureState !== 'review';
+  $('reviewGrid').querySelectorAll('input').forEach(input => { input.disabled = busy || captureState !== 'review'; });
+  $('reset').disabled = !connected || busy;
+  $('selectionCount').textContent = `${selectedPhotos.size} of ${reviewPhotos.length} selected · minimum 12`;
+}
+
+function showReview(photos) {
+  reviewPhotos = photos;
+  selectedPhotos = new Set(photos);
+  const grid = $('reviewGrid'); grid.replaceChildren();
+  for (const name of photos) {
+    const label = document.createElement('label');
+    const check = document.createElement('input'); check.type = 'checkbox'; check.checked = true;
+    check.onchange = () => { if (check.checked) selectedPhotos.add(name); else selectedPhotos.delete(name); updateControls(); };
+    const img = document.createElement('img'); img.loading = 'lazy'; img.alt = name;
+    img.src = `/scans/${encodeURIComponent(scanId)}/images/${encodeURIComponent(name)}`;
+    label.append(img, check, document.createTextNode(' Include ' + name)); grid.append(label);
+  }
+  $('reviewPanel').hidden = false;
+  updateControls();
+}
+for (const [id, include] of [['selectAll', true], ['selectNone', false]]) {
+  $(id).onclick = () => {
+    selectedPhotos = new Set(include ? reviewPhotos : []);
+    $('reviewGrid').querySelectorAll('input').forEach(input => { input.checked = include; }); updateControls();
+  };
+}
+$('confirmSelection').onclick = () => requestCommand(JSON.stringify({type:'confirm', selected:reviewPhotos.filter(name => selectedPhotos.has(name))}));
+$('startScan').onclick = () => requestCommand('start_scan');
+$('pauseScan').onclick = () => requestCommand('pause');
 
 async function listCams() {
   if (!navigator.mediaDevices?.enumerateDevices) return [];
@@ -133,7 +203,7 @@ async function startCamera(manualId) {
   } catch (error) {
     stream?.getTracks().forEach(track => track.stop()); stream = null;
     $('cameraStatus').textContent = cameraError(error, window.isSecureContext);
-  } finally { cameraStarting = false; }
+  } finally { cameraStarting = false; updateControls(); }
 }
 cam.onchange = () => startCamera(cam.value);
 $('startCamera').onclick = () => startCamera();
@@ -141,7 +211,7 @@ $('refreshCameras').onclick = () => listCams().catch(error => { $('cameraStatus'
 navigator.mediaDevices?.addEventListener?.('devicechange', () => listCams().catch(() => {}));
 window.addEventListener('pagehide', () => { stream?.getTracks().forEach(track => track.stop()); ws?.close(); });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearTimeout(timer);
+  if (document.hidden) { clearTimeout(timer); if (captureState === 'capturing') requestCommand('pause'); }
   else if (!inFlight) schedule();
 });
 $('photos').onchange = event => {
@@ -154,7 +224,7 @@ $('photos').onchange = event => {
   stream?.getTracks().forEach(track => track.stop()); stream = null;
   importQueue = files; importFailures = 0; stopped = false;
   $('importStatus').textContent = 'Importing photos. Keep this page open.';
-  event.target.value = ''; schedule();
+  event.target.value = ''; updateControls(); schedule();
 };
 
 function requestCommand(value) {
@@ -162,6 +232,7 @@ function requestCommand(value) {
   if (!ws || ws.readyState !== WebSocket.OPEN || command) return;
   clearTimeout(timer);
   command = value;
+  updateControls();
   if (!inFlight) dispatchCommand();
 }
 function dispatchCommand() {
@@ -170,16 +241,22 @@ function dispatchCommand() {
 }
 function schedule() {
   clearTimeout(timer);
-  if (!stopped && !command && !document.hidden) timer = setTimeout(send, 150);
+  if (!stopped && !command && !document.hidden && (captureState === 'capturing' || importQueue.length)) timer = setTimeout(send, 150);
 }
 function connect() {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-  ws.onclose = () => { clearTimeout(timer); banner.textContent = 'Scanner disconnected. Reload the page to reconnect.'; banner.className = 'bad'; };
+  ws.onclose = () => { clearTimeout(timer); banner.textContent = 'Scanner disconnected. Reload the page to reconnect.'; banner.className = 'bad'; updateControls(); };
   ws.onerror = () => { banner.textContent = 'Could not connect to the scanner.'; banner.className = 'bad'; };
   ws.onmessage = e => {
     const r = JSON.parse(e.data);
     banner.textContent = r.msg; banner.className = r.lvl || '';
     if (r.scan_id) scanId = r.scan_id;
+    if (r.state) captureState = r.state;
+    if (r.last_saved && r.last_saved !== lastSavedName) {
+      lastSavedName = r.last_saved;
+      $('lastSaved').src = `/scans/${encodeURIComponent(scanId)}/images/${encodeURIComponent(lastSavedName)}`;
+      $('lastSaved').hidden = false; $('lastSavedStatus').textContent = lastSavedName;
+    }
     if (r.mode) $('mode').textContent = r.mode === 'capture' ? 'Capture only · photos saved locally' : 'Reconstruction enabled · experimental mesh export';
     if (r.bins) {
       bins = r.bins; cur = r.cur; $('kfs').textContent = r.kfs; $('pts').textContent = r.pts;
@@ -202,10 +279,22 @@ function connect() {
       }
       if (command) dispatchCommand(); else schedule();
     } else if (r.type === 'ready') schedule();
+    else if (r.type === 'state') {
+      command = null; stopped = captureState !== 'capturing';
+      $('reviewPanel').hidden = true; schedule();
+    }
+    else if (r.type === 'review') {
+      command = null; stopped = true; showReview(r.photos);
+    }
+    else if (r.type === 'error') { command = null; stopped = captureState !== 'capturing'; schedule(); }
+    else if (r.type === 'busy') { captureState = 'processing'; stopped = true; }
     else if (r.type === 'import') { command = null; importReady = true; schedule(); }
     else if (r.type === 'reset') {
       command = null; stopped = false; $('downloads').replaceChildren();
       lastOverlay = null; previousSavedCount = 0; savedFlash = false;
+      lastSavedName = null; $('lastSaved').hidden = true;
+      $('lastSavedStatus').textContent = 'Nothing saved. Frame the object, then press Start scan.';
+      reviewPhotos = []; selectedPhotos = new Set(); $('reviewPanel').hidden = true;
       analyzedFrame.width = 0; renderProcessed(); schedule();
     } else if (r.type === 'capture') {
       command = null; stopped = false; schedule();
@@ -218,6 +307,7 @@ function connect() {
       }
       if (!stopped) schedule();
     }
+    updateControls();
   };
 }
 async function send() {
@@ -240,7 +330,7 @@ async function send() {
     }
     return;
   }
-  if (!stream) return;
+  if (!stream || captureState !== 'capturing') return;
   if (!v.videoWidth || v.readyState < 2) { schedule(); return; }
   inFlight = true;
   [grab.width, grab.height] = frameSize(v.videoWidth, v.videoHeight);
@@ -313,7 +403,7 @@ function draw() {
 }
 
 if (!navigator.mediaDevices?.getUserMedia) $('cameraStatus').textContent = cameraError(new Error('Camera API unavailable'), window.isSecureContext);
-draw(); renderProcessed(); connect();
+draw(); renderProcessed(); connect(); updateControls();
 </script>
 </body>
 </html>

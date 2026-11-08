@@ -11,7 +11,7 @@ Install Python 3.11 x64, then from the repository root:
 ./scripts/launch.ps1 -Mode capture
 ```
 
-Use the existing Camo workflow at `http://localhost:8000`, or import a consistent photo set. Finish at least 12 views and confirm files exist in `scans/<id>/images/`. The application reports capture-only mode and does not claim to have created a model.
+Use the existing Camo workflow at `http://localhost:8000`, or import a consistent photo set. Start camera previews without saving; press Start scan explicitly. Finish & review at least 12 useful views, exclude unwanted shots, and confirm the selection. Download `reviewed-images.zip` and extract its selected `images/` folder for transfer. The application reports capture-only mode and does not claim to have created a model.
 
 Setup installs constrained Python dependencies and runs CPU checks. It preserves existing config and does not download inference weights or GPU tools. Internet is needed for the initial dependency installation.
 
@@ -40,7 +40,7 @@ For an interactive capture:
 For photos transferred from the development laptop, stop the web server, then run:
 
 ```powershell
-.venv/Scripts/python.exe -m scripts.reconstruct 'scans/ACTUAL_CAPTURE_ID/images'
+.venv/Scripts/python.exe -m scripts.reconstruct 'PATH_TO_EXTRACTED_REVIEWED_IMAGES/images'
 ```
 
 Replace the example folder with the actual path. The command copies validated JPEGs into a new scan folder, runs the same adapter, and writes `result.json` with elapsed time and output location. Never run a separate batch process alongside a heavy web job: execution limits apply within one process.

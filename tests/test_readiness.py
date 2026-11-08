@@ -70,6 +70,9 @@ class CaptureTests(unittest.TestCase):
                     ws.send_bytes(self.jpeg())
                     self.assertTrue(ws.receive_json()['accepted'])
                 ws.send_text('finish')
+                review = ws.receive_json()
+                self.assertEqual(review['type'], 'review')
+                ws.send_json({'type': 'confirm', 'selected': review['photos']})
                 self.assertEqual(ws.receive_json()['type'], 'busy')
                 result = ws.receive_json()
                 self.assertTrue(result['done'])
@@ -91,7 +94,8 @@ class CaptureTests(unittest.TestCase):
 
     def test_non_jpeg_rejected(self):
         image = cv2.imencode('.png', np.zeros((480, 640, 3), np.uint8))[1].tobytes()
-        self.assertEqual(server.Scan().process(image)['lvl'], 'bad')
+        active = server.Scan(); active.state = 'capturing'
+        self.assertFalse(active.process(image)['accepted'])
         scan = server.Scan()
         self.assertTrue(scan.import_photo(image)['accepted'])
         self.assertEqual((scan.out / 'originals/kf_0000.png').read_bytes(), image)

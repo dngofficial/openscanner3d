@@ -16,6 +16,22 @@ Assume a 24–48-hour event, one processing computer, and one active scan. The c
 - Implemented foundation: capture/reconstruct modes, configured tool paths, constrained Python dependencies, Windows setup/launch scripts, doctor report, bounded reconstruction attempts, and photo-import fallback. See `docs/PARTNER_SETUP.md` and `docs/PHONE_SETUP.md`.
 - Phase 0's real GPU/textured-model gate moves to the partner machine. CPU tests or a synthetic mesh export do not satisfy it. Texturing, segmentation, Blender cleanup, and the 3D viewer remain outstanding.
 
+### Current capture implementation status
+
+This is progress within the existing plan, not a replacement roadmap. The capture work supports Phase 1's frozen inputs and Phase 3's start/pause/finish and thumbnail review requirements while the partner validates Phase 0.
+
+- [x] Separate camera preview from server-authorized saving with Start scan, Pause/Resume, and Finish & review.
+- [x] Show the last accepted photo alongside the live preview.
+- [x] Reject poor initial image quality and weak/inconsistent scene matches during automatic capture; manual capture cannot bypass these checks.
+- [x] Review thumbnails and exclude unwanted frames without deleting original files.
+- [x] Freeze only the confirmed selection/settings for reconstruction and provide a reviewed image ZIP for partner transfer.
+- [x] Verify preview/pause behavior, unrelated-scene rejection, and selected-only input snapshots in automated tests.
+- [x] Verify browser import → thumbnail review → exclusion → confirmation → ZIP link using synthetic images.
+- [ ] Rehearse the new controls with Samsung/Camo on a stationary textured object; measure acceptance/rejection behavior and tune thresholds if necessary.
+- [ ] Complete real GPU reconstruction and independently inspect the textured result on the partner machine (Phase 0 remains open).
+
+Continuity checks use full-scene feature matching and do not establish object-specific overlap, camera coverage, or reconstruction success. Imported photos require human review. Existing scan files are preserved; new review sessions do not automatically reopen older sessions.
+
 ## Success criteria
 
 - A real set of overlapping phone photos produces a textured GLB locally.

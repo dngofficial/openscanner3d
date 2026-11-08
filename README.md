@@ -15,7 +15,20 @@ If the Python launcher is unavailable, pass your installed interpreter: `./scrip
 
 Open **http://localhost:8000 on the laptop**, then press **Start camera**. Camo is preferred when available; the camera selector still supports other webcams. Refresh cameras after connecting a device. If permission is denied, allow camera access for this site and retry. Photo import works without a camera.
 
-The default `capture` mode uses CPU OpenCV and saves frames without running reconstruction. A working discrete GPU is not required for capture or the automated tests. `Finish` stops frame submission after at least 12 saved photos; this count is an input minimum, not a reconstruction-quality guarantee.
+The default `capture` mode uses CPU OpenCV and saves frames without running reconstruction. A working discrete GPU is not required for capture or the automated tests.
+
+## Controlled capture and review
+
+1. **Start camera** opens a local live preview. It saves nothing.
+2. Frame the stationary object, then press **Start scan**. Accepted frames appear in **Last saved photo** beside the live preview.
+3. Move in small steps with the whole object visible. Automatic capture requires adequate sharpness/exposure and spatially distributed, geometrically consistent matches with the last saved image. These are tunable scene-continuity heuristics, not object-specific coverage measurements.
+4. **Pause** stops saving while the local preview stays visible. Resume after returning toward the last accepted view. One already-submitted frame may finish before the pause acknowledgement; no later frames are accepted while paused.
+5. **Finish & review** stops saving and opens thumbnails. Uncheck unrelated, obstructed, or moved-object frames. Imports go through this same review step, but do not receive automatic continuity validation.
+6. **Confirm selected photos** requires at least 12 distinct frames. It freezes an input snapshot and settings; originals and excluded files remain unchanged. Capture mode offers `reviewed-images.zip`; reconstruction mode processes only the snapshot.
+
+Manual **Capture this view** bypasses the cadence and duplicate-motion thresholds, but still obeys blur/exposure and continuity checks. If the scene no longer matches, return toward the last saved view or start a new scan. Camera switching starts a new preview-only session. Hiding the page pauses active capture. Tracking overlays are collapsed and unchecked by default.
+
+The reviewed ZIP contains only selected working JPEGs in `images/` and a `selection.json` manifest. Extract it on the partner laptop and pass that extracted `images/` folder to the batch reconstruction command. Do not transfer the entire unreviewed capture folder as the default pipeline input.
 
 ## Samsung and iPhone through Camo
 
@@ -45,6 +58,8 @@ Tool discovery is not proof of successful reconstruction. The current adapter pr
 - `config.example.toml`: documented defaults. Copy to ignored `config.local.toml` for machine-specific values; setup does this only if missing.
 - `scans/<id>/images/`: saved working JPEGs, usable for a partner-machine reconstruction test.
 - `scans/<id>/runs/<attempt>/`: separate COLMAP workspace for each reconstruction attempt.
+- `scans/<id>/selections/<selection-id>/`: immutable reviewed input copies and settings manifest.
+- `scans/<id>/reviewed-images.zip`: most recently confirmed selection for partner transfer.
 - `scans/<id>/colmap.log`: most recent reconstruction log.
 - `scans/<id>/mesh.glb` and `mesh.obj`: published only after successful mesh export validation.
 - `sample-data/`, `scans/`, `data/`, `.venv/`, `.tools/`, local config, keys, and weights are ignored.

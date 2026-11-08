@@ -10,6 +10,7 @@ The partner reports that the existing iPhone/Camo workflow works. Preserve that 
 4. Select a rear camera in Camo Studio. Start at a consistent 720p or 1080p output, with effects, background replacement, and automatic framing disabled. Keep the same orientation, lens, and zoom throughout a scan.
 5. Start the local scanner on the laptop, open `http://localhost:8000`, and press **Start camera**. Allow browser camera permission.
 6. The app prefers a device whose name contains Camo. If needed, press **Refresh cameras**, choose Camo explicitly, and check that the live preview is your phone's view.
+7. Frame the stationary object before pressing **Start scan**. Use **Pause** when repositioning or handling the phone; preview continues without saving. **Finish & review** lets you exclude unsuitable shots before confirming the selection and downloading the reviewed image ZIP.
 
 Do not open localhost on the phone for this workflow. The laptop browser receives Camo's webcam feed; the phone runs Camo Camera.
 
@@ -32,7 +33,7 @@ Record the phone model, OS version, laptop browser/version, Camo versions, conne
 - [ ] Switching cameras starts a new scan without deleting old photos.
 - [ ] Permission denial and Camo disconnection give useful instructions.
 - [ ] JPEG gallery import works with the camera stopped.
-- [ ] Frame folders can be copied to the GPU laptop and accepted by the batch command.
+- [ ] The reviewed image ZIP can be extracted on the GPU laptop and its `images/` folder accepted by the batch command.
 - [ ] Rehearse without internet after installation, using the selected Camo connection.
 
 These are physical-device acceptance checks, not completed claims. Automated tests cover device selection and framing logic, not Camo drivers or a real Samsung camera.

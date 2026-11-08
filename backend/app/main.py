@@ -3,6 +3,10 @@ Pipeline: JPEG frames -> changed-view photo capture + independent SIFT/PnP live 
 On Finish: keyframes go to COLMAP (dense + Poisson mesh) -> scan/mesh.obj + scan/mesh.glb
 """
 import asyncio, math, uuid, logging, time
+import json, shutil, re, zipfile
+from dataclasses import asdict
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
+from typing import Literal
 from PIL import Image, UnidentifiedImageError
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +16,7 @@ from fastapi.responses import FileResponse
 from .config import load_settings, resolve_tool
 from .reconstruction import reconstruct
 from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
+from .capture_quality import continuity
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
@@ -20,6 +25,12 @@ AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
 KF_DEG, MIN_BLUR = 6, 25             # new keyframe every 6 deg of orbit; Laplacian var floor
 bf = cv2.BFMatcher(cv2.NORM_L2)
 app = FastAPI()
+
+
+class ConfirmSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["confirm"]
+    selected: list[StrictStr] = Field(min_length=12, max_length=500)
 
 
 def match(a, b):
@@ -39,6 +50,8 @@ class Scan:
         s.img.mkdir(parents=True, exist_ok=True)
         s.overlay = None; s.previous_features = None
         s.import_next = False; s.frame_shape = None
+        s.state = "preview"
+        s.accepted = False
         s.photos = []; s.last_photo = None; s.force_capture = False; s.capture_note = "Waiting for a usable frame"
         s.K = None; s.kfs = []; s.pts = np.zeros((0, 3)); s.ptd = np.zeros((0, 128), np.float32)
         s.bins = np.zeros((len(EL_EDGES) + 1, AZ), int); s.cur = None; s.size = 0
@@ -76,30 +89,22 @@ class Scan:
         if len(s.photos) >= SETTINGS.max_photos:
             s.capture_note = f"{SETTINGS.max_photos}-photo limit reached; finish this scan."
             return
-        if s.last_photo is not None and not forced:
-            if now - s.last_photo["time"] < .7:
+        if s.last_photo is not None:
+            if not forced and now - s.last_photo["time"] < .4:
                 s.capture_note = "Waiting between captures"
                 return
-            matches = match(s.last_photo["d"], d)
-            if len(matches) >= 15:
-                pa = s.last_photo["xy"][[m.queryIdx for m in matches]]
-                pb = xy[[m.trainIdx for m in matches]]
-                motion = float(np.median(np.linalg.norm(pb - pa, axis=1)))
-                if motion < 12:
-                    s.capture_note = f"Move the camera a little farther ({motion:.1f}/12 px change)"
-                    return
-            else:
-                # A changed viewpoint can lose overlap; save it for offline matching.
-                thumb = cv2.resize(gray, (160, 120)).astype(float)
-                difference = np.mean(np.abs(thumb - s.last_photo["thumb"]))
-                if difference < 10:
-                    s.capture_note = "View has not changed enough"
-                    return
+            valid, motion, message = continuity(s.last_photo["xy"], s.last_photo["d"], xy, d, gray.shape[1], gray.shape[0])
+            if not valid:
+                s.capture_note = message
+                return
+            if not forced and motion < 8:
+                s.capture_note = f"Move a small step around the stationary object ({motion:.1f}/8 px change)"
+                return
         name = f"kf_{len(s.photos):04d}.jpg"
         (s.img / name).write_bytes(jpg)
         s.photos.append(name)
-        s.last_photo = dict(xy=xy, d=d, time=now,
-                            thumb=cv2.resize(gray, (160, 120)).astype(float))
+        s.last_photo = dict(xy=xy, d=d, time=now)
+        s.accepted = True
         s.capture_note = f"Saved photo {len(s.photos)}" + (" manually" if forced else "")
 
     def add_kf(s, R, t, xy, d, jpg):
@@ -125,7 +130,9 @@ class Scan:
 
     # ---- feedback ---------------------------------------------------------
     def fb(s, msg, lvl="warn", **kw):
-        return dict(msg=msg, lvl=lvl, kfs=len(s.photos), tracked_views=len(s.kfs), capture=s.capture_note,
+        return dict(msg=msg, lvl=lvl, kfs=len(s.photos), state=s.state,
+                    last_saved=s.photos[-1] if s.photos else None,
+                    tracked_views=len(s.kfs), capture=s.capture_note,
                     tracking="Mapping" if len(s.pts) else "Initializing", pts=len(s.pts), bins=s.bins.ravel().tolist(),
                     cur=s.cur, size=round(s.size, 2), overlay=s.overlay, **kw)
 
@@ -167,6 +174,8 @@ class Scan:
 
     def import_photo(s, jpg):
         s.overlay = None
+        if s.state not in {"preview", "paused", "review"}:
+            return s.fb("Pause capture before importing photos, or start a new scan after completion.", "bad", accepted=False)
         try:
             normalized, suffix = normalize_photo(jpg)
             s.decode(normalized)
@@ -181,14 +190,26 @@ class Scan:
         (s.img / name).write_bytes(normalized)
         s.photos.append(name)
         s.last_photo = None
+        s.state = "paused"
         s.capture_note = f"Imported photo {len(s.photos)}"
         return s.fb(s.capture_note, "ok", accepted=True)
 
     def process(s, jpg):
+        s.accepted = False
+        if s.state != "capturing":
+            return s.fb("Preview only. Press Start scan to save photos.", "ok", accepted=False)
+        result = s.process_active(jpg)
+        # Give the capture decision priority over optional live mapping guidance.
+        result.update(accepted=s.accepted, msg=s.capture_note, capture=s.capture_note)
+        result["lvl"] = "ok" if s.accepted else "warn"
+        return result
+
+    def process_active(s, jpg):
         s.overlay = None
         try:
             full = s.decode(jpg)
         except (ValueError, UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+            s.capture_note = str(error)
             return s.fb(str(error), "bad")
         img = cv2.resize(full, (960, int(960 * full.shape[0] / full.shape[1])))
         g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY); H, W = g.shape
@@ -207,9 +228,13 @@ class Scan:
                 msg = f"Frame is overexposed ({brightness}/255); reduce exposure or glare."
             else:
                 msg = f"Only {len(kp)} trackable features (need 40). Focus on a detailed matte object; include nearby textured surroundings."
+            s.capture_note = msg
             return s.fb(msg, "warn", **info)
-        # Sharpness alone is not a reliable rejection test across cameras.
-        info["quality"] = "Soft frame; hold steady or check focus." if blur < MIN_BLUR else "Frame usable"
+        if blur < MIN_BLUR or brightness < 35 or brightness > 225 or contrast < 12:
+            s.force_capture = False
+            s.capture_note = "Frame too soft, dark, bright, or low-contrast. Hold steady and check lighting."
+            return s.fb(s.capture_note, "warn", **info)
+        info["quality"] = "Frame passed initial quality checks"
         s.save_view(xy, d, jpg, g)
 
         if not s.kfs:
@@ -255,12 +280,42 @@ class Scan:
         return r
 
     # ---- finish -----------------------------------------------------------
-    def finish(s):
-        if len(s.photos) < 12: return dict(msg=f"Only {len(s.photos)} saved photos. Capture at least 12 first.", lvl="bad")
+    def review(s):
+        s.state = "review"
+        s.force_capture = False
+        return dict(type="review", photos=list(s.photos), **s.fb("Review photos and uncheck unwanted views before confirming.", "ok"))
+
+    def finish(s, selected):
+        if s.state != "review":
+            raise ValueError("Finish capture and review the photos before confirming.")
+        if len(selected) < 12 or len(set(selected)) != len(selected) or not set(selected) <= set(s.photos):
+            raise ValueError("Select at least 12 distinct photos from this scan.")
+        selected_set = set(selected)
+        selected = [name for name in s.photos if name in selected_set]
+        snapshot = s.out / "selections" / uuid.uuid4().hex
+        images = snapshot / "images"
+        images.mkdir(parents=True)
+        for name in selected:
+            shutil.copyfile(s.img / name, images / name)
+        manifest = dict(scan_id=s.id, selected=selected, excluded=[name for name in s.photos if name not in selected_set], settings=asdict(SETTINGS))
+        (snapshot / "selection.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        archive = snapshot / "reviewed-images.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for name in selected:
+                bundle.write(images / name, "images/" + name)
+            bundle.write(snapshot / "selection.json", "selection.json")
+        archive.replace(s.out / "reviewed-images.zip")
         with open(s.out / "sparse.ply", "w") as f:
             f.write(f"ply\nformat ascii 1.0\nelement vertex {len(s.pts)}\nproperty float x\nproperty float y\nproperty float z\nend_header\n")
             f.writelines(f"{x} {y} {z}\n" for x, y, z in s.pts)
-        return reconstruct(s.img, s.out, SETTINGS)
+        s.state = "processing"
+        try:
+            result = reconstruct(images, s.out, SETTINGS)
+            s.state = "finished" if result.get("done") else "review"
+            return dict(**result, state=s.state, selected_count=len(selected))
+        except Exception:
+            s.state = "review"
+            raise
 
 
 @app.get("/")
@@ -281,11 +336,21 @@ def health():
 def download(scan_id: str, filename: str):
     if not __import__("re").fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", scan_id):
         raise HTTPException(404)
-    if filename not in {"sparse.ply", "mesh.obj", "mesh.glb", "colmap.log"}:
+    if filename not in {"sparse.ply", "mesh.obj", "mesh.glb", "colmap.log", "reviewed-images.zip"}:
         raise HTTPException(404)
     path = SCANS / scan_id / filename
     if not path.is_file(): raise HTTPException(404)
     return FileResponse(path, filename=filename)
+
+
+@app.get("/scans/{scan_id}/images/{filename}")
+def saved_photo(scan_id: str, filename: str):
+    if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", scan_id) or not re.fullmatch(r"kf_[0-9]{4}\.jpg", filename):
+        raise HTTPException(404)
+    path = SCANS / scan_id / "images" / filename
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @app.websocket("/ws")
@@ -295,12 +360,22 @@ async def ws_(ws: WebSocket):
     if origin and origin not in (f"http://{host}", f"https://{host}"):
         await ws.close(code=1008); return
     await ws.accept(); s = Scan()
-    await ws.send_json({"type": "ready", "scan_id": s.id, "mode": SETTINGS.mode,
+    await ws.send_json({"type": "ready", "scan_id": s.id, "mode": SETTINGS.mode, "state": s.state,
                         "msg": f"Scanner ready ({SETTINGS.mode} mode). Start the camera."})
     try:
         while True:
             m = await ws.receive()
             if m["type"] == "websocket.disconnect": break
+            selection = None
+            if (m.get("text") or "").startswith("{"):
+                try:
+                    selection = ConfirmSelection.model_validate_json(m["text"]).selected
+                    if s.state != "review" or len(set(selection)) != len(selection) or not set(selection) <= set(s.photos):
+                        raise ValueError("Review this scan and select distinct saved photos only.")
+                    m["text"] = "confirm"
+                except (ValidationError, ValueError) as error:
+                    await ws.send_json(dict(type="error", state=s.state, msg="Invalid review selection. Select at least 12 photos from this scan.", lvl="bad"))
+                    continue
             if m.get("bytes") is not None:
                 try:
                     processor = s.import_photo if s.import_next else s.process
@@ -315,22 +390,33 @@ async def ws_(ws: WebSocket):
                 s = Scan()
                 await ws.send_json({"type": "reset", "scan_id": s.id, **s.fb("New scan started.", "ok")})
             elif m.get("text") == "capture":
-                s.force_capture = True
+                s.force_capture = s.state == "capturing"
                 await ws.send_json({"type": "capture", **s.fb("Manual capture requested; waiting for a usable frame.", "ok")})
+            elif m.get("text") in {"start_scan", "pause"}:
+                action = m["text"]
+                if s.state == "finished":
+                    await ws.send_json(dict(type="error", state=s.state, msg="Start a new scan after finishing.", lvl="warn"))
+                    continue
+                s.state = "capturing" if action == "start_scan" else "paused"
+                s.force_capture = False
+                s.capture_note = "Capturing. Keep the object stationary." if s.state == "capturing" else "Paused. No camera frames will be saved."
+                await ws.send_json(dict(type="state", **s.fb(s.capture_note, "ok")))
             elif m.get("text") == "import":
                 s.import_next = True
                 await ws.send_json({"type": "import", "msg": "Importing photo…"})
             elif m.get("text") == "cancel_import":
                 s.import_next = False
             elif m.get("text") == "finish":
+                await ws.send_json(s.review())
+            elif m.get("text") == "confirm" and selection is not None:
                 message = "Saving capture." if SETTINGS.mode == "capture" else "Building experimental reconstruction. This can take several minutes."
                 await ws.send_json({"type": "busy", "msg": message, "lvl": "ok"})
                 try:
-                    result = await asyncio.to_thread(s.finish)
+                    result = await asyncio.to_thread(s.finish, selection)
                 except Exception:
                     logging.exception("Reconstruction failed")
-                    result = {"msg": "Reconstruction failed; check the server console.", "lvl": "bad"}
-                files = ["sparse.ply", "colmap.log"]
+                    result = {"msg": "Processing failed; check the server console.", "lvl": "bad", "state": s.state}
+                files = ["reviewed-images.zip", "sparse.ply", "colmap.log"]
                 if result.get("model_ready"):
                     files.extend(["mesh.obj", "mesh.glb"])
                 result.update(type="finish", scan_id=s.id,
