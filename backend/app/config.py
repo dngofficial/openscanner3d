@@ -25,6 +25,10 @@ class Settings:
     sam2_checkpoint: str = "models/sam2.1_hiera_tiny.pt"
     sam2_config: str = "configs/sam2.1/sam2.1_hiera_t.yaml"
     segmentation_device: str = "auto"
+    # UV texturing via OpenMVS (InterfaceCOLMAP + TextureMesh). auto: texture when the tools are found.
+    openmvs_bin: str = ""
+    texturing: str = "auto"
+    glb_exporter: str = "auto"       # auto: Blender when found, else trimesh; or "blender" / "trimesh"
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -53,6 +57,12 @@ def load_settings(path: Path | None = None) -> Settings:
         raise ValueError("segmentation_python must be an interpreter path, or empty for the server's Python")
     if settings.segmentation_device not in {"auto", "cuda", "cpu"}:
         raise ValueError("segmentation_device must be auto, cuda, or cpu")
+    if settings.texturing not in {"auto", "off"}:
+        raise ValueError("texturing must be auto or off")
+    if settings.glb_exporter not in {"auto", "blender", "trimesh"}:
+        raise ValueError("glb_exporter must be auto, blender, or trimesh")
+    if not isinstance(settings.openmvs_bin, str):
+        raise ValueError("openmvs_bin must be a folder path, or empty to search PATH")
     return settings
 
 

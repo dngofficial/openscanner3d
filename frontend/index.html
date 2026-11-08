@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Object scanner</title>
+<script type="importmap">{"imports": {"three": "/vendor/three/three.module.min.js"}}</script>
 <style>
   :root { --bg:#16181b; --panel:#1f2226; --ink:#e8e3d8; --dim:#8d908f; --have:#5fb3a1; --need:#d99a3a; --bad:#d9604a; }
   * { box-sizing: border-box; }
@@ -43,6 +44,14 @@
   .ai { border-top:1px solid #3a3e44; padding-top:12px; }
   button:disabled { opacity:.45; cursor:default; }
   [hidden] { display:none !important; }
+  #viewerCanvas { width:100%; border-radius:4px; overflow:hidden; background:#0e1013; touch-action:none; }
+  #viewerCanvas canvas { display:block; max-width:none; } /* Overrides the coverage-dial canvas rule. */
+  .badge { display:inline-block; padding:2px 8px; border-radius:3px; font-size:13px; font-weight:600; background:var(--need); color:#1a1205; }
+  .badge.live { background:var(--have); color:#0e1a17; }
+  #results table { width:100%; border-collapse:collapse; font-size:14px; }
+  #results td { padding:6px 4px; border-top:1px solid #3a3e44; vertical-align:top; }
+  #results a, #modelDownloads a { color:var(--have); margin-right:10px; }
+  .state-failed, .state-interrupted { color:var(--bad); } .state-cancelled { color:var(--need); } .state-ready { color:var(--have); }
   @media (max-width:860px) { .comparison { grid-template-columns:1fr; } }
 </style>
 </head>
@@ -66,13 +75,35 @@
     <p>Click a photo below to open it here, then click on the object. Click every distinct part you want kept, such as its top <em>and</em> its sides; one click can select only one face. Shift-click marks something that is not the object, such as your hand or the table.</p>
     <canvas id="promptCanvas" width="960" height="540" aria-label="Photo for AI object prompts"></canvas>
     <p id="promptInfo">No photo chosen for prompts.</p>
-    <div class="row"><button id="clearPoints">Clear clicks on this photo</button><button id="runSegment" class="go">Run AI selection</button></div>
+    <div class="row"><button id="clearPoints">Clear clicks on this photo</button><button id="runSegment" class="go">Run AI selection</button><button id="cancelSegment" hidden>Cancel AI selection</button></div>
     <p id="aiStatus" role="status"></p>
   </div>
   <div class="row"><button id="selectAll">Select all</button><button id="selectNone">Clear selection</button></div>
   <div id="reviewGrid"></div>
   <p id="selectionCount" role="status"></p>
   <button id="confirmSelection" class="go">Confirm selected photos</button>
+</section>
+<section id="jobPanel" class="processed" hidden>
+  <h2>Processing <span id="jobScan"></span></h2>
+  <p><strong id="jobState"></strong> · stage: <span id="jobStage"></span></p>
+  <p id="jobMessage" role="status"></p>
+  <ul id="jobWarnings"></ul>
+  <small>Stages are the pipeline's actual steps; no time estimate is given. This page can be closed and reopened.</small>
+  <div class="row"><button id="cancelJob">Cancel processing</button></div>
+</section>
+<section id="viewerPanel" class="processed" hidden>
+  <h2>3D result <span id="viewerScan"></span> <span id="viewerBadge" class="badge"></span></h2>
+  <div class="row"><select id="modelChoice" aria-label="Model to view"></select></div>
+  <div id="viewerCanvas" aria-label="3D model viewer: drag to rotate, scroll or pinch to zoom, right-drag to pan"></div>
+  <p id="viewerStats" role="status"></p>
+  <small>Drag to rotate, scroll or pinch to zoom, right-drag to pan. Experimental photogrammetry mesh: arbitrary scale, unseen surfaces may be missing.</small>
+  <div id="modelDownloads"></div>
+</section>
+<section id="results" class="processed">
+  <h2>Results</h2>
+  <div class="row"><button id="refreshResults">Refresh results</button></div>
+  <table><tbody id="resultRows"></tbody></table>
+  <small id="resultsNote">Earlier scans stay on this computer. Saved fallbacks are labelled and are not new scans.</small>
 </section>
 <section class="processed">
 <details><summary>Tracking diagnostics (optional)</summary>
@@ -119,6 +150,7 @@
 <script type="module">
 import { preferredCamera, cameraConstraints, frameSize, cameraError } from '/camera.mjs';
 import { promptPoint, segmentRequest } from '/selection.mjs';
+import { createViewer } from '/viewer.mjs';
 const $ = id => document.getElementById(id), v = $('v'), cam = $('cam'), banner = $('banner');
 const AZ = 12, RINGS = 3, ctx = $('dome').getContext('2d'), grab = document.createElement('canvas');
 let stream, ws, bins = new Array(AZ * RINGS).fill(0), cur = null;
@@ -378,9 +410,9 @@ function connect() {
     }
     else if (r.type === 'error') { command = null; stopped = captureState !== 'capturing'; schedule(); }
     else if (r.type === 'motion') { command = null; }
-    else if (r.type === 'segmenting') { $('aiStatus').textContent = r.msg; }
+    else if (r.type === 'segmenting') { $('aiStatus').textContent = r.msg; $('cancelSegment').hidden = false; }
     else if (r.type === 'segmented') {
-      command = null; $('aiStatus').textContent = r.msg;
+      command = null; $('aiStatus').textContent = r.msg; $('cancelSegment').hidden = true;
       if (r.done) { maskVersion = r.version; maskAreas = r.frames || {}; showMasks(); }
     }
     else if (r.type === 'busy') { captureState = 'processing'; stopped = true; }
@@ -404,10 +436,105 @@ function connect() {
         a.textContent = 'Download ' + file; a.style.display = 'block'; a.style.color = '#5fb3a1'; box.append(a);
       }
       if (!stopped) schedule();
+      if (r.job_started) { captureState = 'processing'; pollJob(scanId); }
+      refreshResults();
     }
     updateControls();
   };
 }
+
+/* ---- background jobs, results and viewer ---- */
+const MODELS = [['textured.glb', 'Textured (OpenMVS UV texture)'], ['object.glb', 'AI-isolated object (vertex colours)'],
+                ['mesh.glb', 'Unfiltered mesh (vertex colours)']];
+const fileUrl = (id, file) => `/scans/${encodeURIComponent(id)}/${encodeURIComponent(file)}`;
+let viewer = null, viewerId = null, jobId = null, pollTimer = null;
+async function api(path, options) {
+  const response = await fetch(path, options);
+  return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) };
+}
+function links(id, files, box) {
+  box.replaceChildren(...files.map(file => Object.assign(document.createElement('a'), { href: fileUrl(id, file), textContent: file, download: file })));
+}
+async function pollJob(id) {
+  clearTimeout(pollTimer); jobId = id;
+  const { ok, body } = await api(`/api/scans/${encodeURIComponent(id)}`).catch(() => ({ ok: false, body: {} }));
+  if (!ok) { pollTimer = setTimeout(() => pollJob(id), 4000); return; }
+  $('jobPanel').hidden = false; $('jobScan').textContent = id;
+  $('jobState').textContent = body.state || 'unknown';
+  $('jobStage').textContent = (body.stage || '–') + (body.colmap_stage ? ` (COLMAP log: ${body.colmap_stage})` : '');
+  $('jobMessage').textContent = body.message || '';
+  $('jobWarnings').replaceChildren(...(body.warnings || []).map(text => Object.assign(document.createElement('li'), { textContent: text })));
+  $('cancelJob').hidden = body.state !== 'running';
+  $('cancelJob').disabled = !!body.cancel_requested;
+  if (body.state === 'running') { pollTimer = setTimeout(() => pollJob(id), 2000); return; }
+  if (id === scanId) captureState = body.state === 'ready' ? 'finished' : 'review';
+  updateControls(); refreshResults();
+  if (body.state === 'ready' && MODELS.some(([file]) => body.files.includes(file))) openResult(id);
+}
+$('cancelJob').onclick = async () => {
+  $('cancelJob').disabled = true;
+  const { body } = await api(`/api/scans/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+  $('jobMessage').textContent = body.msg || 'Cancel requested.';
+};
+$('cancelSegment').onclick = async () => {
+  $('cancelSegment').disabled = true;
+  const { body } = await api(`/api/scans/${encodeURIComponent(scanId)}/cancel`, { method: 'POST' });
+  $('aiStatus').textContent = body.msg || 'Cancel requested.'; $('cancelSegment').disabled = false;
+};
+async function openResult(id) {
+  const { ok, body } = await api(`/api/scans/${encodeURIComponent(id)}`);
+  if (!ok) return;
+  const models = MODELS.filter(([file]) => body.files.includes(file));
+  if (!models.length) return;
+  viewerId = id;
+  $('viewerPanel').hidden = false; $('viewerScan').textContent = id;
+  $('viewerBadge').textContent = body.fallback ? `Saved fallback · ${body.fallback.label || 'earlier result'}` : 'This scan';
+  $('viewerBadge').className = body.fallback ? 'badge' : 'badge live';
+  $('modelChoice').replaceChildren(...models.map(([file, label]) => new Option(label, file)));
+  links(id, body.files.filter(file => file !== 'sparse.ply'), $('modelDownloads'));
+  await showModel(models[0][0]);
+  $('viewerPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function showModel(file) {
+  $('viewerStats').textContent = 'Loading ' + file + '…';
+  try {
+    viewer ??= createViewer($('viewerCanvas'));
+    const info = await viewer.load(fileUrl(viewerId, file));
+    $('viewerStats').textContent = `${file}: ${info.triangles.toLocaleString()} triangles · ` +
+      (info.textured ? 'UV texture' : info.vertexColours ? 'vertex colours, no UV texture' : 'no colour data');
+  } catch (error) {
+    $('viewerStats').textContent = 'Could not display ' + file + ': ' + error.message;
+  }
+}
+$('modelChoice').onchange = () => showModel($('modelChoice').value);
+async function refreshResults() {
+  const { ok, body } = await api('/api/scans').catch(() => ({ ok: false, body: [] }));
+  if (!ok) return;
+  $('resultRows').replaceChildren(...body.map(item => {
+    const row = document.createElement('tr');
+    const name = document.createElement('td');
+    name.append(document.createTextNode(item.scan_id));
+    if (item.fallback) { const badge = Object.assign(document.createElement('span'), { className: 'badge', textContent: 'Saved fallback' }); name.append(' ', badge); }
+    const state = Object.assign(document.createElement('td'), { className: 'state-' + (item.state || 'none'), textContent: item.state || 'captured' });
+    const actions = document.createElement('td');
+    if (MODELS.some(([file]) => item.files.includes(file))) {
+      const view = Object.assign(document.createElement('button'), { textContent: 'View' });
+      view.onclick = () => openResult(item.scan_id); actions.append(view, ' ');
+    }
+    if (item.state === 'running') {
+      const watch = Object.assign(document.createElement('button'), { textContent: 'Show progress' });
+      watch.onclick = () => pollJob(item.scan_id); actions.append(watch, ' ');
+    }
+    const files = document.createElement('span'); links(item.scan_id, item.files.filter(file => file.endsWith('.zip') || file.endsWith('.glb')), files);
+    actions.append(files);
+    row.append(name, state, actions);
+    return row;
+  }));
+  // Reattach to a job that is still running, e.g. after a reload or a dropped connection.
+  const running = body.find(item => item.state === 'running');
+  if (running && jobId !== running.scan_id) pollJob(running.scan_id);
+}
+$('refreshResults').onclick = refreshResults;
 async function send() {
   if (!ws || ws.readyState !== WebSocket.OPEN || command || stopped || cameraStarting || inFlight) return;
   if (importQueue.length) {
@@ -501,7 +628,7 @@ function draw() {
 }
 
 if (!navigator.mediaDevices?.getUserMedia) $('cameraStatus').textContent = cameraError(new Error('Camera API unavailable'), window.isSecureContext);
-draw(); renderProcessed(); connect(); updateControls();
+draw(); renderProcessed(); connect(); updateControls(); refreshResults();
 </script>
 </body>
 </html>

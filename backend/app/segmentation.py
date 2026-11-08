@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image
 
 from .config import ROOT, Settings, resolve_tool
-from .reconstruction import _heavy_job, run_logged
+from .reconstruction import Cancelled, _heavy_job, run_logged
 
 EMPTY_MASK_FRACTION = .002
 
@@ -40,7 +40,8 @@ def validate_masks(images: Path, masks: Path, frames: list[str]):
                 raise ValueError(f"Mask for {name} is not binary")
 
 
-def run_segmentation(images: Path, frames: list[str], prompts: list[dict], destination: Path, settings: Settings) -> dict:
+def run_segmentation(images: Path, frames: list[str], prompts: list[dict], destination: Path, settings: Settings,
+                     cancel=None) -> dict:
     python, checkpoint, problem = segmentation_tools(settings)
     if problem:
         return dict(msg=problem, lvl="bad", done=False)
@@ -54,7 +55,7 @@ def run_segmentation(images: Path, frames: list[str], prompts: list[dict], desti
                    "--output", str(work / "result"), "--checkpoint", str(checkpoint), "--config", settings.sam2_config,
                    "--device", settings.segmentation_device]
         log = destination.parent / "segmentation.log"
-        code = run_logged(command, log, settings.timeout_seconds)
+        code = run_logged(command, log, settings.timeout_seconds, cancel)
         if code:
             return dict(msg=f"AI selection failed (exit code {code}). See segmentation.log.", lvl="bad", done=False)
         report = json.loads((work / "result" / "segmentation.json").read_text(encoding="utf-8"))
@@ -71,6 +72,8 @@ def run_segmentation(images: Path, frames: list[str], prompts: list[dict], desti
         if empty:
             message += f" No object found in {len(empty)}; untick those or add a prompt on one of them."
         return dict(msg=message, lvl="warn" if empty else "ok", done=True, frames=report["frames"], empty=empty)
+    except Cancelled:
+        return dict(msg="AI selection cancelled; its process was stopped. Previous masks are unchanged.", lvl="warn", done=False)
     except subprocess.TimeoutExpired:
         return dict(msg="AI selection timed out; its process was stopped.", lvl="bad", done=False)
     finally:

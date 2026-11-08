@@ -27,6 +27,10 @@ Copy `config.example.toml` to `config.local.toml` if setup has not already done 
 
 Doctor checks dependency imports, available disk, NVIDIA driver reporting, COLMAP's required CLI options, and Blender discovery. Its success means prerequisites were found; it explicitly leaves real reconstruction unverified. If it fails, inspect the report and fix the named tool/configuration problem before continuing. The report may contain local executable paths; share it deliberately and keep it out of Git.
 
+### Optional: texturing tools
+
+For a UV-textured `textured.glb`, install OpenMVS (official [cdcseacave/openMVS](https://github.com/cdcseacave/openMVS) release or build; it is AGPL-3.0, so check the licence before redistributing). Set `openmvs_bin = 'C:\path\to\OpenMVS\bin'`, the folder containing `InterfaceCOLMAP.exe` and `TextureMesh.exe`. If Blender is installed, it is used for the GLB export; set `glb_exporter = "trimesh"` to avoid it. Doctor's `texturing` section must show `ok: true`. If an option check fails, report the OpenMVS version and its `--help` output; the flags assumed here have not been checked against a real build yet.
+
 ## 3. Run a real reconstruction
 
 Doctor's `mask_path_supported` must be `true` for Camo input. By default, the adapter masks the Camo watermark corner during COLMAP feature extraction. If your build lacks `--mask_path`, reconstruction stops with an explanation instead of silently using the watermark. Disable masking with `feature_mask_regions = []` only for unwatermarked photos.
@@ -58,6 +62,9 @@ The adapter checks the installed `automatic_reconstructor -h` options, explicitl
 - [ ] Record actual Python/dependency, COLMAP, NVIDIA driver, and Blender versions.
 - [ ] Save the doctor report and exact input set locally.
 - [ ] Run a real scan and inspect `colmap.log`, elapsed time, and peak VRAM.
+- [ ] In the browser, watch the job's stage change, test **Cancel processing** once (check Task Manager for leftover `colmap` processes), then rerun.
+- [ ] Open `mesh.glb`, `object.glb` and `textured.glb` in the web viewer and in Blender. Note what isolation removed or wrongly kept, and whether the texture is aligned.
+- [ ] Label the best real result with `scripts.mark_fallback` and record its inputs.
 - [ ] Record registered images out of the input count, and the mean reprojection error of the sparse model. This separates capture problems from dense/GPU problems.
 - [ ] Open the resulting `mesh.glb` independently in Blender.
 - [ ] Record missing surfaces, background contamination, material appearance, and scale limitations.

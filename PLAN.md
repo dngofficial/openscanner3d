@@ -14,7 +14,7 @@ Assume a 24–48-hour event, one processing computer, and one active scan. The c
 - Partner reconstruction laptop: Windows, RTX 3070 Ti Laptop with 8 GB VRAM, 32 GB RAM (user-reported; real reconstruction validation pending).
 - Initial phone route: Camo Camera on iPhone or Samsung Galaxy S26 Ultra feeds Camo Studio on the laptop; the laptop-local browser selects the Camo virtual webcam. Partner reports the initial iPhone setup works; Samsung physical-device acceptance remains pending.
 - Implemented foundation: capture/reconstruct modes, configured tool paths, constrained Python dependencies, Windows setup/launch scripts, doctor report, bounded reconstruction attempts, and photo-import fallback. See `docs/PARTNER_SETUP.md` and `docs/PHONE_SETUP.md`.
-- Phase 0's real GPU/textured-model gate moves to the partner machine. CPU tests or a synthetic mesh export do not satisfy it. Texturing, segmentation, Blender cleanup, and the 3D viewer remain outstanding.
+- Phase 0's real GPU/textured-model gate moves to the partner machine. CPU tests or a synthetic mesh export do not satisfy it. Segmentation, texturing and export adapters, the viewer and job handling are implemented (see status below); none has produced a real reconstruction yet.
 
 ### Current capture implementation status
 
@@ -32,6 +32,9 @@ This is progress within the existing plan, not a replacement roadmap. The captur
 - [x] Add a turned-object capture mode for a handheld phone: no scene-continuity check, steady cadence, AI masks required before confirm.
 - [x] Local SAM 2.1 tiny segmentation in a separate process, using the video predictor so clicks on one or more frames propagate. Each frame gets its own predicted mask with a visible overlay; prompts, device and checkpoint hash are recorded. Real run on the reviewed set: 77 frames in 180 s on CPU, and 14 frames through the UI in 31.5 s.
 - [x] Masks frozen with the selection and shipped in the ZIP. COLMAP features come from object pixels only. After meshing, vertices are filtered by projection into the masks (`object.glb`), keeping the unfiltered mesh for comparison. Projection is tested against synthetic cameras and OpenCV.
+- [x] Background reconstruction job with atomic `job.json`, 2 s polling, real stage names (including COLMAP's own log headings), process-tree cancellation, reattach after reload, interrupted-on-restart, Results list and labelled saved fallback (`scripts/mark_fallback.py`). Checked in the browser with a fake COLMAP script.
+- [x] Three.js viewer (vendored 0.170.0, no CDN) with rotate, zoom, pan, model switching and downloads. Checked in the browser with synthetic textured and vertex-coloured GLBs.
+- [x] OpenMVS texturing adapter (InterfaceCOLMAP + TextureMesh, option checks, UV-safe cleanup) and textured GLB export (Blender script, trimesh fallback, texture validated on reload). Orchestration tested; not yet run with real OpenMVS or Blender.
 - [ ] Validate object masks and isolation on a real COLMAP reconstruction (partner laptop), for both a turned-object capture and an orbit capture.
 - [ ] Recapture with a full orbit at 2–3 heights. The first reviewed set covers only about 90–120° of a dark, low-texture object.
 - [ ] Rehearse the new controls with Samsung/Camo on a stationary textured object; measure acceptance/rejection behavior and tune thresholds if necessary.

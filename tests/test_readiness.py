@@ -150,7 +150,7 @@ class ReconstructionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = Path(root)
             write_images(output / 'images')
-            def produce_mesh(command, log, timeout):
+            def produce_mesh(command, log, timeout, cancel=None):
                 masks = Path(command[command.index('--mask_path') + 1])
                 for name in ('kf_0000.jpg.png', 'kf_0001.jpg.png'):
                     mask = cv2.imread(str(masks / name), cv2.IMREAD_GRAYSCALE)

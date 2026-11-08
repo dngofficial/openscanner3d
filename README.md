@@ -79,7 +79,7 @@ Follow [PARTNER_SETUP.md](docs/PARTNER_SETUP.md). After the CPU setup works, con
 
 Camo's free tier burns a watermark into the bottom-right of every frame. Because it never moves, it produces zero-motion matches that conflict with real camera motion. By default, `feature_mask_regions` excludes that corner from live SIFT tracking. The reconstruction adapter also writes one COLMAP mask per image (`runs/<attempt>/masks/<image>.png`) and passes `--mask_path`. Reconstruction refuses to start if the installed COLMAP lacks that option, and doctor reports `mask_path_supported`. On the reviewed 77-frame Camo set, masking cut near-zero-motion SIFT matches between frames four apart from 87 to 7. That measures feature cleanup, not reconstruction success. Masks affect feature extraction only, not dense stereo. Set `feature_mask_regions = []` for photos without a watermark.
 
-Tool discovery is not proof of successful reconstruction. The current adapter produces an **experimental mesh** with vertex colours, not a verified textured or quad-topology model. UV texturing, Blender processing, and the 3D viewer remain unimplemented. SAM 2 masking and mask-based isolation are implemented, but have not yet been validated on a real reconstruction. Blender discovery in doctor is informational; the current export uses trimesh.
+Tool discovery is not proof of successful reconstruction. The adapter produces an **experimental mesh** with vertex colours, plus a UV-textured GLB when OpenMVS is installed. No real reconstruction, isolation or texture has yet been produced by this code, since the development laptop has no COLMAP or CUDA GPU; that is the partner laptop's acceptance run. There is no quad remeshing and no hole filling. Blender discovery in doctor is informational; the current export uses trimesh.
 
 ## Storage and configuration
 
@@ -90,18 +90,59 @@ Tool discovery is not proof of successful reconstruction. The current adapter pr
 - `scans/<id>/reviewed-images.zip`: most recently confirmed selection for partner transfer (with `object_masks/` when AI selection ran).
 - `scans/<id>/object_masks/`: latest AI selection (`masks/`, `previews/`, `segmentation.json`); `segmentation.log` holds its process output.
 - `scans/<id>/object.glb` and `object.obj`: AI-isolated mesh, published only with a mesh from the same attempt.
+- `scans/<id>/textured.glb`: UV-textured model from OpenMVS, published only with a mesh from the same attempt.
+- `scans/<id>/job.json`: background job state and stage; `fallback.json`: saved-fallback label and model hashes.
 - `scans/<id>/colmap.log`: most recent reconstruction log.
 - `scans/<id>/mesh.glb` and `mesh.obj`: published only after successful mesh export validation.
 - `sample-data/`, `scans/`, `data/`, `.venv/`, `.tools/`, local config, keys, and weights are ignored.
 
-A failed rerun keeps the previous export on disk and does not advertise it as a new result. Closing the browser does not cancel an already-running subprocess; browser reconnection and cancellation are still pending. Stop the app before using the batch reconstruction command; concurrency control is within one server process, not across multiple app/CLI instances.
+A failed rerun keeps the previous export on disk and does not advertise it as a new result. Stop the app before using the batch reconstruction command; concurrency control is within one server process, not across multiple app/CLI instances.
+
+## Processing, results and the 3D viewer
+
+In `reconstruct` mode, **Confirm selected photos** starts a background job and returns immediately. The job does not depend on the browser connection:
+
+- **Status** is written atomically to `scans/<id>/job.json`, and the page polls `GET /api/scans/<id>` every 2 seconds. It shows the state (`running`, `ready`, `failed`, `cancelled`, `interrupted`) and the pipeline's real stage names. During COLMAP's step, it also shows the latest section heading found in `colmap.log`, such as "feature matching" or "dense stereo". There are no percentages or time estimates.
+- **Cancel processing** (`POST /api/scans/<id>/cancel`) stops the whole process tree, not just a label. A test runs a `.bat` wrapper that launches a child process and confirms both are gone. **Cancel AI selection** does the same for SAM 2.
+- **Closing or reloading the page** leaves the job running. On load, the page reattaches to a running job.
+- **Server restart:** a job left marked `running` becomes `interrupted`. Start a clean rerun from review. Stopping the server cancels its running job.
+- **One heavy task at a time:** reconstruction and AI selection share a lock, and a second request gets a clear "busy" message.
+
+**Results** lists earlier scans with their state, downloads, and a **View** button. The viewer is Three.js 0.170.0, vendored in `frontend/vendor/three` (MIT licence included; npm package SHA-1 `6087f97aab79e9e9312f9c89fcef6808642dfbb7`), so no CDN is used at runtime. It shows `textured.glb`, `object.glb` and `mesh.glb`:
+
+- drag to rotate, scroll or pinch to zoom, right-drag to pan;
+- it reports the triangle count and whether the model has a UV texture or only vertex colours;
+- it links each file for download.
+
+Viewer controls, model switching, reattaching after reload, cancellation and the interrupted-on-restart path were checked in the browser. COLMAP was a fake script and the models were synthetic GLB fixtures, because this laptop has no COLMAP or CUDA GPU.
+
+### Saved fallback for the demo
+
+After a real scan succeeds, label it as the fallback:
+
+```powershell
+.venv/Scripts/python.exe -m scripts.mark_fallback SCAN_ID --label "Power bank, 60 photos, partner laptop, 2026-11-08"
+```
+
+This writes `fallback.json` with the label and the SHA-256 of each model. Results and the viewer then show a **Saved fallback** badge, so it is never presented as a new scan. Use `--remove` to clear the label.
+
+### Texturing (OpenMVS) and GLB export
+
+COLMAP does not texture meshes. When OpenMVS is found (`openmvs_bin` in `config.local.toml`, or on PATH), the steps after meshing are:
+
+1. Write COLMAP's dense model as text (`model_converter`).
+2. `InterfaceCOLMAP` converts it to an OpenMVS scene.
+3. `TextureMesh` UV-maps the photos onto the AI-isolated object, or onto the whole mesh if there is no isolated object. The mesh is first cleaned without breaking UVs: degenerate and duplicate faces and unused vertices are removed.
+4. The textured OBJ becomes `textured.glb`. Blender is used when found (`scripts/blender_export_glb.py`: removes loose geometry and degenerate faces, then exports glTF); otherwise trimesh. The GLB is reloaded and must contain UVs and an embedded base-colour texture.
+
+Each tool's options are checked first. Texturing failures leave the untextured meshes available, and a stale `textured.glb` is never kept beside a newer mesh. Doctor reports a `texturing` section. **Not yet verified:** none of OpenMVS, Blender or a real texture has run. Only the orchestration and the trimesh texture round trip are tested.
 
 ## Repository layout
 
 ```text
 backend/app/       FastAPI capture, configuration, image validation, reconstruction adapter
 backend/           Runtime/dev requirements and tested version constraints
-frontend/          Existing HTML interface and camera helpers (no bundler required)
+frontend/          HTML interface, camera/selection helpers, Three.js viewer (vendored, no bundler)
 scripts/           Windows setup/launch, environment doctor, batch reconstruction
 tests/             CPU capture/backend tests and Node camera-helper tests
 docs/              Partner setup, phone setup, longer-term plan

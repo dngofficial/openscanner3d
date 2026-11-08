@@ -138,7 +138,7 @@ class MaskFileTests(unittest.TestCase):
 
 def fake_segment(frames_area):
     """Stand-in for the SAM 2 subprocess: writes the files scripts/segment.py produces."""
-    def run(command, log, timeout):
+    def run(command, log, timeout, cancel=None):
         images, output = Path(command[command.index("--images") + 1]), Path(command[command.index("--output") + 1])
         frames = json.loads(Path(command[command.index("--request") + 1]).read_text())["frames"]
         (output / "masks").mkdir(parents=True); (output / "previews").mkdir()
@@ -182,7 +182,7 @@ class SegmentationAdapterTests(unittest.TestCase):
     def test_empty_masks_warn_and_bad_output_keeps_previous(self):
         result = self.run_segmentation(fake_segment(0.0))
         self.assertEqual((result["lvl"], len(result["empty"])), ("warn", 3))
-        def missing_mask(command, log, timeout):
+        def missing_mask(command, log, timeout, cancel=None):
             fake_segment(.3)(command, log, timeout)
             next((Path(command[command.index("--output") + 1]) / "masks").iterdir()).unlink()
             return 0
@@ -283,7 +283,7 @@ class ReconstructionWithMasksTests(unittest.TestCase):
             box, floor, masks = synthetic_scene(scene_root)
             for path in masks.iterdir():
                 cv2.imwrite(str(root / "images" / path.name[:-4]), np.full((HEIGHT, WIDTH, 3), 100, np.uint8))
-            def produce(command, log, timeout):
+            def produce(command, log, timeout, cancel=None):
                 workspace = Path(command[command.index("--workspace_path") + 1])
                 self.assertIn("--mask_path", command)
                 (workspace / "dense/0").mkdir(parents=True)
@@ -301,7 +301,7 @@ class ReconstructionWithMasksTests(unittest.TestCase):
             self.assertLess(result["isolation"]["kept_faces"], result["isolation"]["input_faces"])
             self.assertGreater(len(trimesh.load(root / "object.glb", force="mesh").faces), 0)
             # A rerun whose isolation fails must not leave the earlier object beside a new mesh.
-            def no_sparse(command, log, timeout):
+            def no_sparse(command, log, timeout, cancel=None):
                 workspace = Path(command[command.index("--workspace_path") + 1])
                 (workspace / "dense/0").mkdir(parents=True)
                 box.export(workspace / "dense/0/meshed-poisson.ply")

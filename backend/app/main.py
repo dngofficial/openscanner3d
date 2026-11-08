@@ -2,7 +2,8 @@
 Pipeline: JPEG frames -> changed-view photo capture + independent SIFT/PnP live map.
 On Finish: keyframes go to COLMAP (dense + Poisson mesh) -> scan/mesh.obj + scan/mesh.glb
 """
-import asyncio, math, uuid, logging, time
+import asyncio, math, uuid, logging, time, threading
+from contextlib import asynccontextmanager
 import json, shutil, re, zipfile
 from dataclasses import asdict
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
@@ -12,11 +13,13 @@ from PIL import Image, UnidentifiedImageError
 from datetime import datetime
 from pathlib import Path
 import cv2, numpy as np, uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from .config import load_settings, resolve_tool
 from .reconstruction import reconstruct
 from .segmentation import run_segmentation, segmentation_tools
+from .jobs import Jobs, describe, recover
 from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
 from .capture_quality import continuity, exposure_problem, frame_problem
 from .masks import region_mask
@@ -28,7 +31,27 @@ AZ, EL_EDGES = 12, (20, 50)          # 12 azimuth sectors x 3 elevation rings
 KF_DEG = 6                           # new keyframe every 6 deg of orbit
 TURN_MIN_CHANGE = 6                  # mean grey-level change between saved views when turning the object
 bf = cv2.BFMatcher(cv2.NORM_L2)
-app = FastAPI()
+JOBS = Jobs()
+SEGMENTING = {}                      # scan id -> cancel event for a running AI selection
+SCAN_ID = r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}"
+
+
+@asynccontextmanager
+async def lifespan(_):
+    SCANS.mkdir(exist_ok=True)
+    if interrupted := recover(SCANS):
+        logging.warning("Marked %d unfinished job(s) as interrupted", interrupted)
+    yield
+    # Do not leave a reconstruction process tree running after the server exits.
+    if JOBS.current:
+        JOBS.cancel(JOBS.current["scan_id"])
+        JOBS.wait(20)
+    for event in SEGMENTING.values():
+        event.set()
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/vendor", StaticFiles(directory=BASE / "frontend" / "vendor"), name="vendor")
 
 
 class ConfirmSelection(BaseModel):
@@ -352,7 +375,11 @@ class Scan:
         if not {prompt["frame"] for prompt in prompts} <= set(selected):
             raise ValueError("Tap the object on a photo that is still selected.")
         selected = [name for name in s.photos if name in set(selected)]
-        result = run_segmentation(s.img, selected, prompts, s.out / "object_masks", SETTINGS)
+        cancel = SEGMENTING[s.id] = threading.Event()
+        try:
+            result = run_segmentation(s.img, selected, prompts, s.out / "object_masks", SETTINGS, cancel)
+        finally:
+            SEGMENTING.pop(s.id, None)
         if result["done"]:
             s.segmentation = dict(frames=result["frames"], version=uuid.uuid4().hex[:8])
         return dict(**result, version=(s.segmentation or {}).get("version"))
@@ -399,14 +426,18 @@ class Scan:
         with open(s.out / "sparse.ply", "w") as f:
             f.write(f"ply\nformat ascii 1.0\nelement vertex {len(s.pts)}\nproperty float x\nproperty float y\nproperty float z\nend_header\n")
             f.writelines(f"{x} {y} {z}\n" for x, y, z in s.pts)
-        s.state = "processing"
-        try:
+        if SETTINGS.mode != "reconstruct":
             result = reconstruct(images, s.out, SETTINGS, masks)
-            s.state = "finished" if result.get("done") else "review"
+            s.state = "finished"
             return dict(**result, state=s.state, selected_count=len(selected))
-        except Exception:
-            s.state = "review"
-            raise
+        # Reconstruction runs as a background job so it survives a closed tab; the page polls its status.
+        work = lambda progress, cancel: reconstruct(images, s.out, SETTINGS, masks, progress, cancel)
+        if not JOBS.start(s.id, s.out, work):
+            return dict(msg="Another heavy task is running. Wait for it or cancel it, then confirm again.", lvl="warn",
+                        done=False, state=s.state, selected_count=len(selected))
+        s.state = "processing"
+        return dict(msg="Reconstruction started. You can close this page; reopen the result from Results.", lvl="ok",
+                    done=False, job_started=True, state=s.state, selected_count=len(selected))
 
 
 @app.get("/")
@@ -415,6 +446,44 @@ def index(): return FileResponse(BASE / "frontend" / "index.html")
 
 @app.get("/camera.mjs")
 def camera_module(): return FileResponse(BASE / "frontend" / "camera.mjs", media_type="text/javascript")
+
+
+@app.get("/viewer.mjs")
+def viewer_module(): return FileResponse(BASE / "frontend" / "viewer.mjs", media_type="text/javascript")
+
+
+def same_origin(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    host = request.headers.get("host", "")
+    return not origin or origin in (f"http://{host}", f"https://{host}")
+
+
+@app.get("/api/scans")
+def list_scans():
+    folders = sorted((path for path in SCANS.glob("*") if path.is_dir() and re.fullmatch(SCAN_ID, path.name)), reverse=True)
+    results = [describe(folder) for folder in folders[:200]]
+    return [item for item in results if item.get("state") or item["files"] != [] and set(item["files"]) - {"sparse.ply"}][:50]
+
+
+@app.get("/api/scans/{scan_id}")
+def scan_status(scan_id: str):
+    if not re.fullmatch(SCAN_ID, scan_id) or not (SCANS / scan_id).is_dir():
+        raise HTTPException(404)
+    return describe(SCANS / scan_id)
+
+
+@app.post("/api/scans/{scan_id}/cancel")
+def cancel_scan(scan_id: str, request: Request):
+    if not same_origin(request):
+        raise HTTPException(403)
+    if not re.fullmatch(SCAN_ID, scan_id):
+        raise HTTPException(404)
+    if JOBS.cancel(scan_id):
+        return JSONResponse(dict(msg="Cancelling reconstruction."), status_code=202)
+    if scan_id in SEGMENTING:
+        SEGMENTING[scan_id].set()
+        return JSONResponse(dict(msg="Cancelling AI selection."), status_code=202)
+    return JSONResponse(dict(msg="Nothing is running for this scan."), status_code=409)
 
 
 @app.get("/selection.mjs")
@@ -432,7 +501,7 @@ def download(scan_id: str, filename: str):
     if not __import__("re").fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}", scan_id):
         raise HTTPException(404)
     if filename not in {"sparse.ply", "mesh.obj", "mesh.glb", "object.obj", "object.glb", "colmap.log",
-                        "segmentation.log", "reviewed-images.zip"}:
+                        "segmentation.log", "reviewed-images.zip", "textured.glb"}:
         raise HTTPException(404)
     path = SCANS / scan_id / filename
     if not path.is_file(): raise HTTPException(404)
@@ -550,6 +619,8 @@ async def ws_(ws: WebSocket):
                     files.extend(["mesh.obj", "mesh.glb"])
                 if result.get("object_ready"):
                     files.extend(["object.glb", "object.obj"])
+                if result.get("textured_ready"):
+                    files.append("textured.glb")
                 result.update(type="finish", scan_id=s.id,
                               files=[f for f in files if (s.out / f).is_file()])
                 await ws.send_json(result)
