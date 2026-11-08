@@ -307,6 +307,24 @@ def recover():
             write(status, dict(state="interrupted", finished=now(), message="The server stopped during reconstruction."))
 
 
+def print_qr(url: str, out=None):
+    """Draw the phone link as a terminal QR code when the console can show it.
+
+    Windows consoles often use cp1252, which has no block characters; there the dashboard shows the QR
+    code instead. Never let this stop the server from starting.
+    """
+    import io
+    import segno
+    out = out or sys.stdout
+    drawing = io.StringIO()
+    segno.make(url, error="m").terminal(out=drawing, compact=True)
+    try:
+        out.write(drawing.getvalue())
+        out.flush()
+    except (UnicodeEncodeError, OSError):
+        print("(Open https://localhost:%d on this laptop for the QR code.)" % SETTINGS.port, file=out)
+
+
 def serve():
     SCANS.mkdir(exist_ok=True)
     recover()
@@ -320,10 +338,9 @@ def serve():
     addresses = network.lan_addresses()
     print(f"Scanner on https://localhost:{SETTINGS.port} (laptop dashboard shows the phone QR code).")
     if addresses:
-        import segno
         url = f"https://{addresses[0]}:{SETTINGS.port}/phone?key={network.ACCESS_KEY}"
         print(f"Phone link (same Wi-Fi): {url}")
-        segno.make(url, error="m").terminal(compact=True)
+        print_qr(url)
     # Listen on all interfaces; the middleware still refuses non-private clients and requests without the key.
     uvicorn.run(app, host="0.0.0.0", port=SETTINGS.port, ssl_certfile=str(cert), ssl_keyfile=str(key))
 

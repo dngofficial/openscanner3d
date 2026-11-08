@@ -79,6 +79,15 @@ class AccessTests(ApiTestCase):
         self.assertEqual(phone.post("/api/scans", headers={"origin": "https://evil.example"}).status_code, 403)
         self.assertEqual(phone.post("/api/scans", headers={"origin": "https://testserver"}).status_code, 200)
 
+    def test_terminal_qr_never_blocks_startup_on_a_cp1252_console(self):
+        console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        server.print_qr("https://192.168.1.10:8443/phone?key=x", console)  # Must not raise.
+        console.seek(0)
+        self.assertIn("localhost:8443", console.read())
+        utf8 = io.StringIO()
+        server.print_qr("https://192.168.1.10:8443/phone?key=x", utf8)
+        self.assertGreater(len(utf8.getvalue().splitlines()), 10)  # A real QR drawing.
+
     def test_client_classification(self):
         self.assertEqual([network.client_kind(h) for h in ("127.0.0.1", "::1", "10.0.0.5", "172.20.1.1", "192.168.0.9",
                                                             "169.254.3.3", "100.64.1.1", "8.8.8.8", "testclient")],
