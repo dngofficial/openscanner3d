@@ -78,6 +78,13 @@ The angles saved with each photo (`poses.json` in the ZIP) are guidance data, no
 
 ## Troubleshooting
 
+On the tested Samsung, allowing Chrome's **Nearby devices** app permission resolved
+`ERR_TOO_MANY_RETRIES`. Check Settings → Apps → Chrome → Permissions if the laptop is
+reachable from another phone but not this one. Permission labels vary by Android version.
+If the scanner then asks you to scan the QR code, refresh the laptop dashboard and scan
+its current QR: restarting the server invalidates previous links. The login cookie uses
+`SameSite=Lax` to support the top-level redirect from external QR scanners.
+
 | Problem | Fix |
 | --- | --- |
 | Phone can't open the page | Same Wi-Fi? Laptop network set to Private? Firewall allowed Python on private networks? Guest or office Wi-Fi often blocks devices from talking to each other ("client isolation"); use a phone hotspot or home router instead. |

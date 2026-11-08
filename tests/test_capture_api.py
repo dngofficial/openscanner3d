@@ -33,7 +33,8 @@ class ApiTestCase(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
-        for target, value in (("SCANS", self.root), ("SETTINGS", Settings(lan=True))):
+        settings = Settings(lan=True, tls_cert=str(self.root / "lan.pem"), tls_key=str(self.root / "lan-key.pem"))
+        for target, value in (("SCANS", self.root), ("SETTINGS", settings)):
             patcher = patch.object(server, target, value); patcher.start(); self.addCleanup(patcher.stop)
         self.local = TestClient(server.app, client=LOCAL)
 
@@ -58,6 +59,9 @@ class AccessTests(ApiTestCase):
         self.assertEqual(redirect.status_code, 303)
         self.assertNotIn("key=", redirect.headers["location"])  # The key leaves the address bar.
         self.assertIn("httponly", redirect.headers["set-cookie"].lower())
+        self.assertIn("samesite=lax", redirect.headers["set-cookie"].lower())
+        self.assertIn("secure", redirect.headers["set-cookie"].lower())
+        self.assertEqual(redirect.headers["cache-control"], "no-store")
         self.assertEqual(stranger.get("/phone").status_code, 200)
         self.assertEqual(stranger.get("/api/plan").json()["sectors"], 12)
 

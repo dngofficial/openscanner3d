@@ -54,7 +54,9 @@ async def guard(request: Request, call_next):
         if network.key_matches(offered):
             # Move the key from the URL into a cookie, then reload without it.
             response = RedirectResponse(request.url.remove_query_params("key"), status_code=303)
-            response.set_cookie(network.COOKIE, network.ACCESS_KEY, httponly=True, secure=True, samesite="strict")
+            # QR scanners can start a cross-site navigation; Lax permits its top-level GET redirect.
+            response.set_cookie(network.COOKIE, network.ACCESS_KEY, httponly=True, secure=True, samesite="lax")
+            response.headers["Cache-Control"] = "no-store"
             return response
         if not network.key_matches(request.cookies.get(network.COOKIE)):
             return PlainTextResponse("Open the link or scan the QR code shown on the laptop's scanner page.", status_code=401)
