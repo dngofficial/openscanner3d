@@ -148,8 +148,64 @@ class Scene:
         self.y = np.cross(self.up, self.x)
         offsets = centres - self.origin
         self.orbit = float(np.median(np.linalg.norm(offsets - np.outer(offsets @ self.up, self.up), axis=1)))
+        self.fit_box(points)
         local = np.stack([(table - self.origin) @ self.x, (table - self.origin) @ self.y], 1).astype(np.float32)
         self.table_outline = cv2.convexHull(local).reshape(-1, 2)
+
+    def fit_box(self, points):
+        """Size the search box from the 3D points standing on the table at the object.
+
+        The fixed box (a fraction of the camera distance) suits photos taken close up. When the cameras
+        stand far back from a small object, it takes in sofas and windows, and the outline step locks
+        onto those instead. If enough points stand on the table near where the cameras aim, the box is
+        centred on that cluster and sized to it. Plain objects with few points keep the fixed box.
+        """
+        from scipy import ndimage
+        orbit = self.orbit
+        self.box_radius, self.box_height, self.box_fitted = BOX_RADIUS * orbit, BOX_HEIGHT * orbit, False
+        self.object_points = None
+        loc = self.local(points)
+        near = ((loc[:, 2] > .01 * orbit) & (loc[:, 2] < BOX_HEIGHT * orbit)
+                & (np.hypot(loc[:, 0], loc[:, 1]) < BOX_RADIUS * orbit))
+        candidates = loc[near]
+        if len(candidates) < 40:
+            return
+        cell = .02 * orbit
+        ij = np.floor(candidates[:, :2] / cell).astype(int)
+        low = ij.min(0)
+        counts = np.zeros(ij.max(0) - low + 1, int)
+        np.add.at(counts, tuple((ij - low).T), 1)
+        labels, found = ndimage.label(ndimage.binary_dilation(counts >= 2))
+        if not found:
+            return
+        point_labels = labels[tuple((ij - low).T)]
+        centres = (np.argwhere(labels > 0) + low + .5) * cell
+        distance = np.hypot(centres[:, 0], centres[:, 1])
+        cell_labels = labels[labels > 0]
+        nearest = {label: distance[cell_labels == label].min() for label in range(1, found + 1)}
+        label = min(nearest, key=nearest.get)
+        cluster = candidates[point_labels == label]
+        if nearest[label] > .08 * orbit or len(cluster) < 30:
+            return
+        centre = np.median(cluster[:, :2], 0)
+        reach = np.percentile(np.hypot(*(cluster[:, :2] - centre).T), 98)
+        top = np.percentile(cluster[:, 2], 99)
+        if np.percentile(cluster[:, 2], 5) < .25 * top:
+            # Points reach down to the table: they seed the first outline (world coordinates, taken before
+            # the origin moves). Points only on top (a cap) are not trusted for this: the body may be wider.
+            self.object_points = self.world(cluster)
+        self.origin = self.world(np.array([[centre[0], centre[1], 0.0]]))[0]
+        self.box_radius = float(np.clip(1.5 * reach + .02 * orbit, .06 * orbit, BOX_RADIUS * orbit))
+        self.box_height = float(np.clip(1.35 * top + .02 * orbit, .08 * orbit, BOX_HEIGHT * orbit))
+        self.box_fitted = True
+
+    def grow_box(self) -> bool:
+        """After a carving touched the edge of a fitted box: enlarge it (up to the fixed box). False if at the limit."""
+        radius = min(BOX_RADIUS * self.orbit, self.box_radius * 1.6)
+        height = min(BOX_HEIGHT * self.orbit, self.box_height * 1.5)
+        grown = radius > self.box_radius + 1e-9 or height > self.box_height + 1e-9
+        self.box_radius, self.box_height = radius, height
+        return grown
 
     def world(self, local):
         local = np.asarray(local, float)
@@ -244,7 +300,7 @@ def grabcut_masks(scene, photos: dict, region) -> dict:
 # ---- carving and meshing ----------------------------------------------------
 def carve(scene, masks: dict, grid=GRID):
     """Voxels above the table inside the outline in all but a couple of the photos that see them."""
-    radius, height = BOX_RADIUS * scene.orbit, BOX_HEIGHT * scene.orbit
+    radius, height = scene.box_radius, scene.box_height
     steps = (np.arange(grid) + .5) / grid
     local = np.stack(np.meshgrid(-radius + 2 * radius * steps, -radius + 2 * radius * steps, height * steps, indexing="ij"), -1).reshape(-1, 3)
     points = scene.world(local)
@@ -283,6 +339,18 @@ def carve(scene, masks: dict, grid=GRID):
     keep = ndimage.binary_dilation(volume, iterations=2)
     score = np.where(keep, score, -tolerance - .5)
     return volume, ndimage.gaussian_filter(score, 1.0), (radius, height)
+
+
+def touches_box(volume) -> bool:
+    return bool(volume[[0, -1]].any() or volume[:, [0, -1]].any() or volume[:, :, -1].any())
+
+
+def carve_fitted(scene, masks: dict, grid=GRID):
+    """carve(), enlarging a box that was fitted to the points while the object reaches its edge."""
+    result = carve(scene, masks, grid)
+    while scene.box_fitted and touches_box(result[0]) and scene.grow_box():
+        result = carve(scene, masks, grid)
+    return result
 
 
 def mesh_volume(score, box, smooth=8):
@@ -384,11 +452,13 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
         if previews:
             save_previews(photos, masks, mask_info, previews)
     else:
-        box = [[BOX_RADIUS * scene.orbit * np.cos(a), BOX_RADIUS * scene.orbit * np.sin(a), z]
-               for a in np.linspace(0, 2 * np.pi, 24, endpoint=False) for z in (0, BOX_HEIGHT * scene.orbit)]
+        box = [[scene.box_radius * np.cos(a), scene.box_radius * np.sin(a), z]
+               for a in np.linspace(0, 2 * np.pi, 24, endpoint=False) for z in (0, scene.box_height)]
         stage("Step 2 of 2: finding the object's outline in each photo.")
-        masks = grabcut_masks(scene, photos, scene.world(box))
-        volume, _, extent = carve(scene, masks, grid=96)
+        # First outline: seeded by the object's own 3D points when they were found, else the whole box.
+        seed = scene.object_points if scene.object_points is not None else scene.world(box)
+        masks = grabcut_masks(scene, photos, seed)
+        volume, _, extent = carve_fitted(scene, masks, grid=96)
         steps = (np.arange(96) + .5) / 96
         r, h = extent
         cells = np.argwhere(volume)
@@ -406,7 +476,7 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     if mask_info.get("note"):
         warnings.append(mask_info["note"])
     stage("Step 2 of 2: building the object's 3D shape from the outlines.")
-    volume, score, extent = carve(scene, masks)
+    volume, score, extent = carve_fitted(scene, masks)
     mesh = mesh_volume(score, extent)
     coloured = colour(mesh, scene, photos, masks)
     # Keep the original mesh frame for camera projection. Transform only export copies.
@@ -427,7 +497,7 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
         for name in game_files:
             (output / name).unlink(missing_ok=True)
         warnings.append(f"Game asset failed; {stem}_hires.glb retained: {type(error).__name__}: {error}")
-    touching = bool(volume[[0, -1]].any() or volume[:, [0, -1]].any() or volume[:, :, -1].any())
+    touching = touches_box(volume)
     return dict(faces=int(len(mesh.faces)), photos=len(model_images),
                 masks={k: v for k, v in mask_info.items() if k not in ('per_photo', 'scores')}, coloured_fraction=round(coloured, 3),
                 size_relative_to_orbit=[round(float(v), 3) for v in mesh.extents / scene.orbit], clipped=touching,

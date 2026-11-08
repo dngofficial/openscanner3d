@@ -21,6 +21,7 @@ import numpy as np
 from .config import ROOT, project_path, resolve_tool
 
 MIN_IOU, MAX_AREA_RATIO = .35, 3.0
+MASK_VERSION = 2  # Bump when how masks are made changes, so cached masks from older runs are not reused.
 BOX_PAD = .06
 
 
@@ -172,13 +173,15 @@ def save_masks(masks: dict, info: dict, folder: Path):
     folder.mkdir(parents=True, exist_ok=True)
     for name, mask in masks.items():
         cv2.imwrite(str(folder / f"{name}.png"), mask.astype(np.uint8) * 255)
-    (folder / "masks.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    (folder / "masks.json").write_text(json.dumps({**info, "version": MASK_VERSION}, indent=2), encoding="utf-8")
 
 
 def load_masks(folder: Path, names) -> tuple[dict, dict] | None:
     try:
         info = json.loads((folder / "masks.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return None
+    if info.get("version") != MASK_VERSION:
         return None
     masks = {}
     for name in names:

@@ -86,7 +86,7 @@ On the first real scan, the game asset had 5,000 triangles, was watertight, got 
 
 How the object step works (`backend/app/silhouette.py`):
 1. Find the table as the dominant plane in COLMAP's dense points.
-2. Place the object where the cameras' viewing directions meet.
+2. Place the object where the cameras' viewing directions meet, then centre and size the search area on the 3D points standing on the table there. This matters when the photos were taken from far back: a fixed-size area took in a sofa and a window behind a soup can. Objects with too few points (plain, dark) keep the fixed area, and a fitted area grows if the object reaches its edge.
 3. Outline it in every photo with GrabCut, told that table pixels away from the object are background (classical computer vision), and carve a rough shape.
 4. **ML step: SAM 2** (Meta's pretrained Segment Anything 2, run locally) outlines the object in each photo, prompted per photo with a box around the projected rough shape and a point from the phone tap (or the shape's centre). Each SAM 2 mask is used where it broadly agrees with that photo's GrabCut outline; otherwise the photo keeps GrabCut. Setup, checkpoint hash and measurements: [models/README.md](models/README.md). Without SAM 2 installed, the step uses GrabCut and says so.
 5. Carve the space inside all but a couple of outlines, mesh it, smooth it, close tunnels a few voxels wide, and colour it.
