@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live multi-view 3D scanner · VGGT</title>
+<style>
+:root{color-scheme:dark;--bg:#101719;--panel:#1b262a;--line:#385052;--text:#e6eeea;--dim:#a3b8b6;--mint:#a4dfb0;--amber:#ffca78}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
+header{padding:22px 28px;border-bottom:1px solid var(--line)}h1{margin:0;font-size:26px;letter-spacing:-.5px}h2{font-size:16px;margin:0 0 10px}p{margin:8px 0}
+main{display:grid;grid-template-columns:minmax(0,1fr) 335px;gap:20px;max-width:1550px;padding:22px 28px;margin:auto}
+.workspace{min-width:0;display:flex;flex-direction:column;gap:20px}.grid{display:grid;grid-template-columns:1.3fr 1fr;gap:18px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.muted,small{color:var(--dim)}button,select{font:inherit;background:#24383c;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px 12px}
+button{cursor:pointer}button:disabled,select:disabled{opacity:.45;cursor:not-allowed}.primary{background:var(--mint);border-color:var(--mint);color:#13291b;font-weight:650}
+.full{width:100%}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row button{flex:1}label{display:block;margin:12px 0}label.inline{display:flex;gap:8px;align-items:center}
+input{accent-color:var(--mint)}video{width:100%;height:auto;display:block;background:#090e10;border-radius:5px}
+.video-wrap{position:relative}#roi{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+#mask{width:100%;max-height:230px;object-fit:contain;background:#090e10}img:not([src]){visibility:hidden}
+.cloud{width:100%;height:430px;display:block;background:#090e10;touch-action:none;cursor:grab;border-radius:6px}
+#localCloud{height:250px}aside{display:flex;flex-direction:column;gap:18px;align-self:start}.status{font-size:13px;color:var(--mint);margin:8px 0;overflow-wrap:anywhere}#error{color:var(--amber);overflow-wrap:anywhere}
+dl{display:grid;grid-template-columns:1fr auto;gap:7px;margin:0}dt{color:var(--dim)}dd{margin:0;text-align:right}
+progress{width:100%;accent-color:var(--mint)}#downloads a{color:var(--mint);padding:6px 0;display:block}hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+summary{cursor:pointer}details p{font-size:13px;color:var(--dim)}#gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-top:14px}
+.thumb{position:relative;border:1px solid var(--line);border-radius:6px;overflow:hidden}.thumb img{display:block;width:100%;height:75px;object-fit:cover}.thumb small{padding:5px;display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.thumb button{position:absolute;right:2px;top:2px;padding:0 7px;background:#112027df}
+button:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+@media(max-width:1000px){main{grid-template-columns:1fr}aside{display:grid;grid-template-columns:1fr 1fr}}
+@media(max-width:650px){main{padding:16px}.grid{grid-template-columns:1fr}aside{display:flex}header{padding:18px}.cloud{height:320px}}
+</style>
+</head>
+<body>
+<header><h1>Live multi-view 3D scanner</h1><p class="muted">Keep a few useful angles. Watch the joint reconstruction update. Finish with a colored PLY.</p></header>
+<main>
+<div class="workspace">
+<div class="grid">
+<section class="panel"><h2>Camera · full images retained for reconstruction</h2>
+<div class="video-wrap"><video id="video" width="640" height="480" autoplay playsinline muted></video><canvas id="roi" width="640" height="480" aria-label="Drag a rectangle around the whole object"></canvas></div>
+<small>Drag a region around the entire object. Keep it inside as you move the camera.</small></section>
+<section class="panel"><h2>Foreground and capture</h2><img id="mask" alt="Latest foreground mask">
+<p id="frameNote" class="status">Start the camera or upload photos.</p>
+<dl><dt>Processed frames</dt><dd id="processed">0</dd><dt>Selected views</dt><dd id="saved">0 / 200</dd><dt>Image detail</dt><dd id="features">–</dd><dt>Sharpness</dt><dd id="sharpness">–</dd></dl>
+<small>The foreground mask filters 3D output; it does not paint over the model's input images.</small></section>
+</div>
+<section class="panel"><div class="row"><h2>Joint multi-view reconstruction</h2><button id="resetView">Reset view</button></div>
+<canvas id="mergedCloud" class="cloud" width="1100" height="600" aria-label="Latest joint reconstructed point cloud"></canvas>
+<p id="mapNote" class="muted">The first cloud appears after at least three selected views and a successful model pass.</p>
+<progress id="progress" max="100" value="0" aria-label="Reconstruction stage progress"></progress><p id="buildStatus" class="status" role="status">Waiting for views.</p>
+<div id="downloads"></div><small>Drag to rotate. Scroll or pinch to zoom. Each pass replaces the whole cloud; coordinates can shift between passes.</small>
+</section>
+<section class="panel"><div class="row"><h2>Selected angles</h2><button id="upload">Add photos</button></div>
+<input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+<p id="uploadStatus" class="muted">Camera keyframes and uploaded photos can share a scan.</p><div id="gallery"></div></section>
+<details class="panel"><summary>Optional single-frame depth preview</summary>
+<label class="inline"><input id="previewEnabled" type="checkbox"> Enable independent Depth Anything preview</label>
+<canvas id="localCloud" class="cloud" width="900" height="450" aria-label="Optional relative-depth preview"></canvas>
+<small id="previewNote">Optional preview requires requirements-preview.txt. It uses a separate latest-frame worker; its clouds are not used for the final VGGT reconstruction.</small>
+</details>
+</div>
+<aside>
+<section class="panel"><h2>Capture and build</h2>
+<div id="engine" class="status">Checking VGGT…</div><button id="loadModel" class="full">Load VGGT model</button>
+<small style="display:block;margin-top:8px">First load downloads several GB of weights. Capture can run while the model loads.</small>
+<label for="camera">Camera</label><select id="camera" class="full"><option value="">Default camera</option></select>
+<button id="start" class="primary full" style="margin-top:12px">Start / resume live capture</button>
+<div class="row" style="margin-top:10px"><button id="pause" disabled>Pause</button><button id="save" disabled>Keep this view</button></div>
+<button id="build" class="full" style="margin-top:12px" disabled>Reconstruct now</button>
+<button id="finish" class="primary full" style="margin-top:10px" disabled>Finish &amp; export PLY</button>
+<button id="cancel" class="full" style="margin-top:10px;display:none">Cancel reconstruction</button>
+<button id="new" class="full" style="margin-top:10px">New scan</button>
+<p id="status" class="status" role="status">Capture overlapping angles of a stationary object.</p><p id="error" role="alert"></p>
+</section>
+<section class="panel"><h2>Reconstruction settings</h2>
+<label class="inline"><input id="auto" type="checkbox" checked> Update automatically during capture</label>
+<label>Maximum views per final pass<select id="views" class="full"><option>3</option><option>4</option><option>6</option><option selected>8</option><option>12</option><option>16</option><option>24</option></select></label>
+<label>Model input size<select id="size" class="full"><option value="224" selected>224 · least memory</option><option value="336">336 · balanced</option><option value="518">518 · more detail / memory</option></select></label>
+<label>Drop weakest confidence predictions <span id="confValue">35%</span><input id="confidence" class="full" type="range" min="0" max="90" value="35"></label>
+<label class="inline"><input id="foreground" type="checkbox" checked> Object-only cloud</label>
+<label class="inline"><input id="consistency" type="checkbox" checked> Require support from another view</label>
+<label class="inline"><input id="cleanup" type="checkbox" checked> Remove isolated noise</label>
+<label class="inline"><input id="denoise" type="checkbox" checked> Light image denoising for segmentation</label>
+<button id="resetROI">Reset object region</button>
+<small style="display:block;margin-top:10px">Automatic passes use at most 8 views and wait at least 8 seconds between starts. Finish uses the selected final budget, sampled across the entire recording.</small>
+<details><summary>Limits and capture tips</summary><p>This is periodic neural reconstruction, not video-rate SLAM. Capture and frame selection continue during background inference. Point-cloud updates arrive whenever a pass finishes.</p>
+<p>Start with 8–16 sharp overlapping angles. Walk around a stationary object. More time recording one unchanged view adds little geometry.</p>
+<p>The model estimates shape and cameras. Scale is arbitrary; unseen parts, shiny surfaces and weak overlap remain difficult. PLY contains colored points, not a watertight surface mesh.</p>
+<p>Low GPU memory: choose 224 pixels and 6 views. CPU mode works but can be much slower. Existing successful results are preserved after failures.</p></details>
+</section>
+</aside>
+</main>
+<script>
+const $=id=>document.getElementById(id),video=$('video'),grab=document.createElement('canvas');
+let scan=null,health=null,stream=null,ws=null,wsReady=false,capturing=false,inFlight=false,finishPending=false,uploading=false;
+let region=[.1,.08,.9,.92],frameTimer=null,pollTimer=null,mapKey=null,previewFrame=-1,galleryKey='';
+const busy=()=>scan&&['queued','running'].includes(scan.job.state);
+const base=()=>'/api/scans/'+scan.id;
+function error(s){$('error').textContent=s;}
+async function api(path,options={}){
+ const response=await fetch(path,options);
+ if(!response.ok){let body;try{body=await response.json();}catch{}throw Error(typeof body?.detail==='string'?body.detail:'Request failed ('+response.status+').');}
+ return response.json();
+}
+function buttons(){
+ const finalBusy=scan&&(scan.finish_requested||scan.final_pending)&&busy();
+ $('start').disabled=!scan||capturing||finishPending||finalBusy||uploading;
+ $('pause').disabled=!capturing;$('save').disabled=!capturing;
+ $('build').disabled=!scan||scan.photos.length<3||busy()||uploading||!health?.vggt.installed;
+ $('finish').disabled=!scan||scan.photos.length<3||finishPending||finalBusy||uploading||!health?.vggt.installed;
+ $('new').disabled=busy()||inFlight||uploading;
+ $('camera').disabled=!!stream;$('upload').disabled=uploading||finalBusy||scan?.finish_requested;
+ $('cancel').style.display=busy()?'block':'none';
+ $('loadModel').disabled=['ready','loading'].includes(health?.vggt.state);
+}
+function captureSettings(){
+ return {type:'settings',roi:region,background:$('foreground').checked,denoise:$('denoise').checked,preview:$('previewEnabled').checked};
+}
+async function sendSettings(){
+ if(wsReady&&ws?.readyState===1)ws.send(JSON.stringify(captureSettings()));
+ else if(scan)try{await api(base()+'/capture-settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(captureSettings())});}catch(e){error(e.message);}
+ drawRegion();
+}
+function drawRegion(){
+ const canvas=$('roi'),c=canvas.getContext('2d');canvas.width=video.videoWidth||640;canvas.height=video.videoHeight||480;
+ c.clearRect(0,0,canvas.width,canvas.height);if(!$('foreground').checked)return;
+ const [x0,y0,x1,y1]=region;c.lineWidth=3;c.strokeStyle='#ffca78';c.strokeRect(x0*canvas.width,y0*canvas.height,(x1-x0)*canvas.width,(y1-y0)*canvas.height);
+}
+let drag=null;
+function pointer(e){const r=$('roi').getBoundingClientRect();return [Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))];}
+$('roi').onpointerdown=e=>{drag=pointer(e);$('roi').setPointerCapture(e.pointerId);};
+$('roi').onpointermove=e=>{if(!drag)return;const p=pointer(e);region=[Math.min(drag[0],p[0]),Math.min(drag[1],p[1]),Math.max(drag[0],p[0]),Math.max(drag[1],p[1])];drawRegion();};
+$('roi').onpointerup=()=>{if(!drag)return;drag=null;if(region[2]-region[0]<.08||region[3]-region[1]<.08)region=[.1,.08,.9,.92];sendSettings();};
+$('roi').onpointercancel=()=>{drag=null;};
+$('resetROI').onclick=()=>{region=[.1,.08,.9,.92];sendSettings();};
+function pause(){capturing=false;clearTimeout(frameTimer);$('status').textContent='Capture paused; background reconstruction can continue.';buttons();}
+function scheduleFrame(){clearTimeout(frameTimer);if(capturing&&wsReady&&!inFlight)frameTimer=setTimeout(sendFrame,150);}
+function sendFrame(){
+ if(!capturing||!wsReady||inFlight)return;if(video.readyState<2){scheduleFrame();return;}
+ inFlight=true;buttons();grab.width=Math.min(1280,video.videoWidth);grab.height=Math.round(grab.width*video.videoHeight/video.videoWidth);
+ grab.getContext('2d').drawImage(video,0,0,grab.width,grab.height);
+ grab.toBlob(blob=>{if(blob&&ws?.readyState===1)ws.send(blob);else{inFlight=false;pause();error('Could not send camera frame.');}},'image/jpeg',.93);
+}
+function connect(){
+ return new Promise((resolve,reject)=>{
+ const socket=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/'+scan.id);ws=socket;wsReady=false;
+ socket.onmessage=e=>{
+  if(ws!==socket)return;const r=JSON.parse(e.data);
+  if(r.type==='ready'){wsReady=true;sendSettings();resolve();}
+  else if(r.type==='frame'){
+   inFlight=false;$('mask').src='data:image/jpeg;base64,'+r.mask;
+   $('processed').textContent=r.processed;$('saved').textContent=r.saved_count+' / 200';$('features').textContent=r.features;$('sharpness').textContent=r.sharpness;$('frameNote').textContent=r.note;
+   if(r.limit_reached)pause();refreshScan(false);
+   if(finishPending)finish();else scheduleFrame();buttons();
+  }else if(r.type==='error'){inFlight=false;finishPending=false;pause();error(r.message);}
+  else if(r.type==='command_error')error(r.message);
+ };
+ socket.onclose=()=>{if(ws!==socket)return;wsReady=false;inFlight=false;pause();if(finishPending)finish();reject(Error('Camera processor disconnected. Restart capture to reconnect.'));};
+ socket.onerror=()=>reject(Error('Could not connect to camera processing.'));
+ });
+}
+async function start(){
+ error('');
+ try{
+  if(scan.finish_requested){scan=await api(base()+'/resume',{method:'POST'});}
+  if(!stream){stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:$('camera').value?{exact:$('camera').value}:undefined,width:{ideal:1280},height:{ideal:720}},audio:false});video.srcObject=stream;await video.play();drawRegion();}
+  if(!wsReady)await connect();
+  capturing=true;$('status').textContent='Selecting keyframes while reconstruction runs independently.';buttons();scheduleFrame();
+ }catch(e){error(e.message);buttons();}
+}
+async function finish(){
+ pause();if(inFlight){finishPending=true;buttons();return;}
+ finishPending=false;error('');
+ try{scan=await api(base()+'/finish',{method:'POST'});render();}catch(e){error(e.message);buttons();}
+}
+function resultBase(job){return base()+'/results/'+job;}
+function render(){
+ $('auto').checked=scan.auto;
+ $('saved').textContent=scan.photos.length+' / 200';$('processed').textContent=scan.processed;
+ $('progress').value=scan.job.progress;$('buildStatus').textContent=scan.job.message;
+ const latest=scan.latest_result;
+ if(latest&&mapKey!==latest.id){
+  const scanId=scan.id;mapKey=latest.id;
+  api(resultBase(latest.id)+'/preview.json').then(data=>{if(scan.id!==scanId||scan.latest_result?.id!==latest.id)return;mergedViewer.set(data.points);}).catch(e=>{mapKey=null;error(e.message);});
+ }
+ if(latest)$('mapNote').textContent=latest.points.toLocaleString()+' points · '+latest.frame_ids.length+' of '+latest.captured_views+' saved views used · '+(latest.final?'final pass':'periodic pass')+(scan.revision>latest.revision?' · newer views/settings waiting':'');
+ $('downloads').replaceChildren();
+ const job=latest?.id||(scan.job.state==='failed'?scan.job.id:null);
+ const labels=latest?{'merged.ply':'Download merged PLY','results.zip':'Download all results','report.json':'Reconstruction report','cameras.json':'Estimated cameras'}:{'reconstruction.log':'Failure log','report.json':'Failure report'};
+ if(job)for(const [file,label]of Object.entries(labels)){const a=document.createElement('a');a.href=resultBase(job)+'/'+file;a.download=file;a.textContent=label;$('downloads').append(a);}
+ if(scan.job.state==='failed'&&latest){
+  for(const file of ['reconstruction.log','report.json']){const a=document.createElement('a');a.href=resultBase(scan.job.id)+'/'+file;a.textContent='Latest failure: '+file;$('downloads').append(a);}
+ }
+ const key=scan.id+':'+scan.photos.map(p=>p.id).join(',')+':'+busy();
+ if(galleryKey!==key){galleryKey=key;$('gallery').replaceChildren();
+  for(const photo of scan.photos){
+   const card=document.createElement('div');card.className='thumb';const image=document.createElement('img');image.src=base()+'/thumbs/'+photo.id;image.alt=photo.name;image.loading='lazy';
+   const label=document.createElement('small');label.textContent=photo.name;
+   const remove=document.createElement('button');remove.textContent='×';remove.disabled=busy();remove.setAttribute('aria-label','Remove '+photo.name);
+   remove.onclick=async()=>{try{scan=await api(base()+'/photos/'+photo.id,{method:'DELETE'});render();}catch(e){error(e.message);}};
+   card.append(image,label,remove);$('gallery').append(card);
+  }
+ }
+ buttons();
+}
+async function refreshScan(repeat=true){
+ if(!scan)return;const id=scan.id;
+ try{const data=await api('/api/scans/'+id);if(scan.id===id){scan=data;render();}}catch(e){error(e.message);}
+ if(repeat){clearTimeout(pollTimer);pollTimer=setTimeout(()=>refreshScan(),1800);}
+}
+async function pollHealth(){
+ try{health=await api('/api/health');$('engine').textContent='VGGT: '+health.vggt.state+' ('+health.vggt.device+')'+(!health.vggt.installed?' · run install_vggt.py':'');
+ if(health.vggt.state==='error')error(health.vggt.error);
+ if($('previewEnabled').checked&&scan){
+  const id=scan.id;const p=await api(base()+'/preview');
+  if(scan.id===id&&p.frame&&p.frame!==previewFrame){previewFrame=p.frame;localViewer.set(p.cloud);$('previewNote').textContent=p.error||'Independent relative-depth preview from frame '+p.frame+'. This cloud is not the joint reconstruction.';}
+  if(health.preview.state==='error')$('previewNote').textContent=health.preview.error;
+ }
+ buttons();}catch(e){error(e.message);}
+ setTimeout(pollHealth,2000);
+}
+async function settingsChanged(){
+ $('confValue').textContent=$('confidence').value+'%';if(!scan)return;
+ const body={max_views:Number($('views').value),image_size:Number($('size').value),confidence:Number($('confidence').value),
+  consistency:$('consistency').checked,cleanup:$('cleanup').checked,foreground:$('foreground').checked,auto:$('auto').checked,interval:8};
+ try{scan=await api(base()+'/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});render();sendSettings();}catch(e){error(e.message);}
+}
+for(const id of ['views','size','confidence','consistency','cleanup','foreground','auto'])$(id).onchange=settingsChanged;
+$('denoise').onchange=sendSettings;
+$('previewEnabled').onchange=async()=>{if($('previewEnabled').checked)try{await api('/api/models/preview/load',{method:'POST'});}catch(e){error(e.message);}sendSettings();};
+async function newScan(){
+ pause();if(ws){const old=ws;ws=null;wsReady=false;old.close();}
+ stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;
+ try{scan=await api('/api/scans',{method:'POST'});localStorage.setItem('vggtScanId',scan.id);region=[.1,.08,.9,.92];mapKey=null;previewFrame=-1;galleryKey='';mergedViewer.set([]);localViewer.set([]);$('mask').removeAttribute('src');$('mapNote').textContent='Waiting for a successful joint reconstruction.';error('');restoreSettings();drawRegion();render();}catch(e){error(e.message);}
+}
+function restoreSettings(){
+ const o=scan.options,c=scan.capture_settings;region=c.roi;$('foreground').checked=o.foreground;$('denoise').checked=c.denoise;$('previewEnabled').checked=c.preview;
+ $('auto').checked=scan.auto;$('views').value=String(o.max_views);$('size').value=String(o.image_size);$('confidence').value=o.confidence;
+ $('confValue').textContent=o.confidence+'%';$('consistency').checked=o.consistency;$('cleanup').checked=o.cleanup;
+}
+$('loadModel').onclick=async()=>{error('');try{health.vggt=await api('/api/models/vggt/load',{method:'POST'});buttons();}catch(e){error(e.message);}};
+$('start').onclick=start;$('pause').onclick=pause;$('save').onclick=()=>{if(wsReady)ws.send('capture');};$('finish').onclick=finish;$('new').onclick=newScan;
+$('build').onclick=async()=>{error('');try{scan=await api(base()+'/build',{method:'POST'});render();}catch(e){error(e.message);}};
+$('cancel').onclick=async()=>{try{scan=await api(base()+'/cancel',{method:'POST'});$('auto').checked=false;render();}catch(e){error(e.message);}};
+$('upload').onclick=()=>$('files').click();
+$('files').onchange=async e=>{
+ if(uploading||!scan)return;uploading=true;error('');buttons();const files=Array.from(e.target.files);let added=0;const failures=[];
+ for(let i=0;i<files.length;i++){
+  $('uploadStatus').textContent='Uploading '+(i+1)+' / '+files.length;
+  try{const result=await api(base()+'/photos?name='+encodeURIComponent(files[i].name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:files[i]});scan=result.scan;if(result.added)added++;}catch(error){failures.push(files[i].name+': '+error.message);}
+ }
+ uploading=false;$('files').value='';$('uploadStatus').textContent=added+' new views added.';error(failures.slice(0,3).join(' '));render();
+};
+function viewer(id){
+ const canvas=$(id),c=canvas.getContext('2d');let points=[],yaw=.4,pitch=-.15,zoom=1;const pointers=new Map();let pinch=null;
+ function draw(){const w=canvas.width,h=canvas.height;c.fillStyle='#090e10';c.fillRect(0,0,w,h);
+ if(!points.length){c.fillStyle='#9aafad';c.font='18px system-ui';c.textAlign='center';c.fillText('Waiting for reconstruction',w/2,h/2);c.textAlign='left';return;}
+ const cy=Math.cos(yaw),sy=Math.sin(yaw),cx=Math.cos(pitch),sx=Math.sin(pitch);
+ const sorted=points.map(([x,y,z,r,g,b])=>{const a=x*cy+z*sy,d=-x*sy+z*cy;return[a,y*cx-d*sx,y*sx+d*cx,r,g,b];}).sort((a,b)=>a[2]-b[2]);
+ for(const[x,y,z,r,g,b]of sorted){const k=Math.min(w,h)*.7*zoom,px=w/2+x*k,py=h/2+y*k;if(px<0||px>w||py<0||py>h)continue;c.fillStyle='rgb('+r+','+g+','+b+')';c.fillRect(px,py,2.6,2.6);}}
+ canvas.onpointerdown=e=>{pointers.set(e.pointerId,[e.clientX,e.clientY]);canvas.setPointerCapture(e.pointerId);pinch=null;};
+ canvas.onpointermove=e=>{if(!pointers.has(e.pointerId))return;const old=pointers.get(e.pointerId);pointers.set(e.pointerId,[e.clientX,e.clientY]);
+ if(pointers.size===1){yaw+=(e.clientX-old[0])*.01;pitch+=(e.clientY-old[1])*.01;}else{const[a,b]=Array.from(pointers.values()),d=Math.hypot(a[0]-b[0],a[1]-b[1]);if(pinch)zoom=Math.min(8,Math.max(.15,zoom*d/pinch));pinch=d;}draw();};
+ for(const e of ['pointerup','pointercancel'])canvas.addEventListener(e,v=>{pointers.delete(v.pointerId);pinch=null;});
+ canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.min(8,Math.max(.15,zoom*Math.exp(-e.deltaY*.001)));draw();},{passive:false});
+ draw();return{reset(){yaw=.4;pitch=-.15;zoom=1;draw();},set(data){if(!data.length){points=[];draw();return;}
+ const axes=[0,1,2].map(i=>data.map(p=>p[i]).sort((a,b)=>a-b));const center=axes.map(a=>a[Math.floor(a.length/2)]);
+ const span=Math.max(...axes.map(a=>a[Math.floor((a.length-1)*.95)]-a[Math.floor((a.length-1)*.05)]),1e-6);
+ points=data.map(p=>[(p[0]-center[0])/span,(p[1]-center[1])/span,(p[2]-center[2])/span,...p.slice(3)]);draw();}};
+}
+const mergedViewer=viewer('mergedCloud'),localViewer=viewer('localCloud');$('resetView').onclick=()=>mergedViewer.reset();
+window.addEventListener('beforeunload',()=>{capturing=false;ws?.close();stream?.getTracks().forEach(t=>t.stop());});
+(async()=>{
+ try{health=await api('/api/health');
+ const devices=await navigator.mediaDevices.enumerateDevices();for(const d of devices.filter(d=>d.kind==='videoinput'))$('camera').add(new Option(d.label||'Camera '+$('camera').options.length,d.deviceId));
+ const id=localStorage.getItem('vggtScanId');if(id)try{scan=await api('/api/scans/'+encodeURIComponent(id));}catch{}
+ if(scan){restoreSettings();render();drawRegion();}else await newScan();
+ pollHealth();refreshScan();
+ }catch(e){error(e.message);}
+})();
+</script>
+</body>
+</html>

@@ -6,6 +6,8 @@ scans
 .venv-photo/
 # Keep actual user scans local.
 /sample-data/
+/vggt_scanner/.venv-vggt/
+/vggt_scanner/model_cache/
 
 # Generated data, local configuration, and credentials
 /data/
