@@ -109,6 +109,12 @@ To process a scan from another laptop, extract its `scan.zip`, then run:
 .venv/Scripts/python.exe -m scripts.reconstruct 'path\to\images'
 ```
 
+The result appears on the dashboard like a phone scan. To show a scan folder copied from another laptop (or made by an older version), put it in `scans/` and run:
+```powershell
+.venv/Scripts/python.exe -m scripts.register_scan scans\SCAN_ID
+```
+It only adds the missing dashboard files (`scan.json`, `poses.json`, `run.json`, `status.json`); photos and models are untouched.
+
 A feed-forward reconstruction path (seconds instead of minutes) is planned next; see PLAN.md.
 
 ## Security model

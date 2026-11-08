@@ -43,6 +43,11 @@ def main() -> int:
         result = {'done': False, 'msg': str(error)}
     result['output_directory'] = str(output)
     (output / 'result.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+    try:
+        from scripts.register_scan import register
+        register(output)  # So the scan appears on the dashboard like a phone scan.
+    except (ValueError, OSError) as error:
+        print(f'Could not register the scan for the dashboard: {error}', file=sys.stderr)
     print(json.dumps(result, indent=2))
     return 0 if result.get('model_ready') else 1
 
