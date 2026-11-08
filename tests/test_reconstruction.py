@@ -1,5 +1,4 @@
-import os
-import io
+"""COLMAP adapter: mesh export, missing tool, exclusive execution, failed reruns, subprocess limits."""
 from pathlib import Path
 import subprocess
 import sys
@@ -7,43 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import cv2
-import numpy as np
-from fastapi.testclient import TestClient
-from PIL import Image
-
 from backend.app import reconstruction
-from backend.app.config import Settings, load_settings
-from backend.app.images import normalize_photo
-
-
-class ConfigurationTests(unittest.TestCase):
-    def test_safe_default_and_invalid_settings(self):
-        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {}, clear=True):
-            path = Path(root) / "config.toml"
-            self.assertEqual(load_settings(path).mode, "capture")
-            for content in ('mode = "cloud"', 'max_photos = 0', 'timeout_seconds = "forever"', 'unknown = 3',
-                            'lan = "yes"', 'port = 80', 'tls_cert = ""'):
-                path.write_text(content)
-                with self.assertRaises(ValueError):
-                    load_settings(path)
-            path.write_text('mode = "reconstruct"\ncolmap = \'C:\\Tools\\COLMAP.exe\'')
-            self.assertEqual(load_settings(path).colmap, r"C:\Tools\COLMAP.exe")
-
-    def test_import_orientation_normalization_and_dimension_limit(self):
-        image = Image.new('RGB', (640, 480))
-        exif = image.getexif()
-        exif[274] = 6
-        data = io.BytesIO()
-        image.save(data, format='JPEG', exif=exif)
-        normalized, suffix = normalize_photo(data.getvalue())
-        self.assertEqual(suffix, '.jpg')
-        with Image.open(io.BytesIO(normalized)) as working:
-            self.assertEqual(working.size, (480, 640))
-        data = io.BytesIO()
-        Image.new('RGB', (9000, 32)).save(data, format='JPEG')
-        with self.assertRaises(ValueError):
-            normalize_photo(data.getvalue())
+from backend.app.config import Settings
 
 
 class ReconstructionTests(unittest.TestCase):

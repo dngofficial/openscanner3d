@@ -53,6 +53,8 @@ The phone page tells you where to go next. It covers **12 sides × 3 heights**: 
 
 The angles come from the phone's motion sensors and assume you keep the object centred while walking around it. They are coverage guidance stored with each photo (`poses.json`), not measured camera poses.
 
+**No live camera?** If camera or motion access is blocked or unsupported, the phone page offers **Upload photos**: take 40–60 photos with the camera app and upload them. They are turned upright and limited to 3200 px, the originals are kept in `originals/`, and they get the same quality checks but no angle data.
+
 ## On the laptop
 
 `https://localhost:8443` (or `http://localhost:8000` without LAN mode) shows:
@@ -81,7 +83,8 @@ A feed-forward reconstruction path (seconds instead of minutes) is planned next;
 
 ## Storage
 
-- `scans/<id>/images/kf_NNNN.jpg`: accepted photos, exactly as uploaded by the phone.
+- `scans/<id>/images/kf_NNNN.jpg`: accepted photos (camera frames as uploaded; uploaded gallery photos upright and at most 3200 px).
+- `scans/<id>/originals/`: uploaded gallery photos exactly as received.
 - `scans/<id>/poses.json`: per-photo azimuth, pitch, ring, side, time and quality measurements.
 - `scans/<id>/scan.json`: creation time, image size, finished flag.
 - `scans/<id>/scan.zip`: written on Finish.
@@ -91,11 +94,19 @@ A feed-forward reconstruction path (seconds instead of minutes) is planned next;
 ## Repository layout
 
 ```text
-backend/app/   main.py (API + LAN guard), network.py, coverage.py, quality.py, images.py, reconstruction.py, config.py
+backend/app/   main.py        API, LAN guard, scan storage
+               network.py     private-network check, launch key, LAN addresses
+               coverage.py    12 x 3 angle checklist
+               quality.py     exposure / sharpness / contrast checks
+               images.py      bounded decoding, upload normalisation
+               reconstruction.py  COLMAP adapter
+               config.py      config.local.toml validation
 frontend/      phone.html (guided capture), index.html (laptop dashboard), guidance.mjs (angle maths, shared)
 scripts/       setup.ps1, launch.ps1, doctor.py, make_cert.py, reconstruct.py
-tests/         Python API/config/reconstruction tests, Node guidance tests, setup smoke check
-docs/          PHONE_SETUP.md, PARTNER_SETUP.md
+tests/         test_capture_api.py, test_config.py, test_reconstruction.py, guidance.test.mjs, check_capture.py (setup smoke check)
+docs/          PHONE_SETUP.md, PARTNER_SETUP.md, implementation_plan.md (long-term background)
+demo/          demo validation checklist
+models/        notes for local model weights (none used on this branch)
 ```
 
 ## Verification
@@ -113,7 +124,8 @@ node --test tests/guidance.test.mjs
 These cover:
 - the guidance maths: orientation to camera direction, angle bins, next-step instructions, steadiness, exposure;
 - access control: outsiders refused, key-to-cookie exchange, laptop-only key, cross-site POST refused;
-- uploads: quality rejection, orientation change, finish and ZIP, undo, background reconstruction start.
+- uploads: quality rejection, orientation change, gallery-photo normalisation with originals kept, finish and ZIP, undo, background reconstruction start;
+- config validation and the COLMAP adapter (mocked COLMAP, real subprocess time limits).
 
 The phone page was also driven in a browser with a synthetic camera and simulated orientation events: auto-capture, a sideways step for the second view, walk-left instructions, the checklist map and Finish. HTTPS serving was checked with a test certificate.
 

@@ -17,13 +17,13 @@ import uuid
 import zipfile
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from PIL import Image, UnidentifiedImageError
 import uvicorn
 
 from . import coverage, network, quality
 from .config import load_settings, project_path, resolve_tool
-from .images import MAX_UPLOAD_BYTES, decode_jpeg
+from .images import MAX_UPLOAD_BYTES, decode_jpeg, normalize_photo
 from .reconstruction import _heavy_job, reconstruct
 
 BASE = Path(__file__).resolve().parents[2]
@@ -157,7 +157,19 @@ def scan_details(scan_id: str):
     return describe(folder(scan_id))
 
 
-def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | None) -> dict:
+def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | None, imported: bool = False) -> dict:
+    """Check and store one photo. Imported gallery photos (the no-live-camera fallback) are kept as uploaded in
+    originals/ and stored upright, at most 3200 px, as the working JPEG; they carry no angle data."""
+    original = None
+    if imported:
+        try:
+            original = data
+            data, suffix = normalize_photo(data)
+        except (UnidentifiedImageError, Image.DecompressionBombError, OSError):
+            return dict(accepted=False, reason="Not a readable photo. Upload JPEG, PNG, or WebP files.")
+        except ValueError as error:
+            return dict(accepted=False, reason=str(error))
+        azimuth = pitch = None
     with _write_lock:
         meta, poses = read(scan / "scan.json", {}), read(scan / "poses.json", [])
         if meta.get("finished"):
@@ -179,10 +191,13 @@ def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | Non
             return dict(accepted=False, reason=problem, quality=values)
         name = f"kf_{len(poses):04d}.jpg"
         (scan / "images" / name).write_bytes(data)
+        if original is not None:
+            (scan / "originals").mkdir(exist_ok=True)
+            (scan / "originals" / f"kf_{len(poses):04d}{suffix}").write_bytes(original)
         ring = coverage.ring_of(pitch) if pitch is not None and azimuth is not None else None
         poses.append(dict(name=name, azimuth=azimuth, pitch=pitch, ring=ring,
                           sector=coverage.sector_of(azimuth) if ring is not None else None,
-                          time=now(), quality={key: round(value, 3) for key, value in values.items()}))
+                          imported=imported, time=now(), quality={key: round(value, 3) for key, value in values.items()}))
         write(scan / "poses.json", poses)
         if not meta.get("size"):
             write(scan / "scan.json", {**meta, "size": list(size)})
@@ -192,7 +207,8 @@ def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | Non
 
 @app.post("/api/scans/{scan_id}/photos")
 async def upload_photo(scan_id: str, request: Request,
-                       azimuth: float | None = Query(None, ge=-720, le=720), pitch: float | None = Query(None, ge=-90, le=90)):
+                       azimuth: float | None = Query(None, ge=-720, le=720), pitch: float | None = Query(None, ge=-90, le=90),
+                       imported: bool = Query(False)):
     scan = folder(scan_id)
     if int(request.headers.get("content-length") or 0) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Photo exceeds 25 MB")
@@ -201,7 +217,7 @@ async def upload_photo(scan_id: str, request: Request,
         data += chunk
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "Photo exceeds 25 MB")
-    return await asyncio.to_thread(add_photo, scan, bytes(data), azimuth, pitch)
+    return await asyncio.to_thread(add_photo, scan, bytes(data), azimuth, pitch, imported)
 
 
 @app.delete("/api/scans/{scan_id}/photos/last")

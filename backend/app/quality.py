@@ -1,6 +1,5 @@
 """Per-photo quality checks; each rejection names one cause with its measured value."""
 import cv2
-import numpy as np
 
 ANALYSIS_WIDTH = 960                 # Measure sharpness at a fixed scale so thresholds mean the same for any camera.
 MIN_SHARPNESS, MIN_CONTRAST, MAX_CLIPPED, MIN_MEAN = 25, 12, .35, 20

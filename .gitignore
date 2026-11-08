@@ -1,20 +1,17 @@
-# GitShift personal account configuration
+# Personal tooling (GitShift account configuration and scratch folder)
 github-accounts.json
 holding
-scans
-.venv/
-.venv-photo/
-# Keep actual user scans local.
-/sample-data/
 
-# Generated data, local configuration, and credentials
+# Scans, sample input and generated data stay on the machine
+scans/
+/sample-data/
 /data/
-/models/*
-!/models/README.md
+
+# Local configuration, certificates and keys (scripts/make_cert.py writes to certs/)
+/config.local.toml
 .env
 .env.*
 !.env.example
-/config.local.toml
 /certs/
 /certificates/
 *.pem
@@ -22,10 +19,16 @@ scans
 *.pfx
 *.p12
 
-# Dependencies and build caches
+# Model weights (keep the README)
+/models/*
+!/models/README.md
+
+# Environments, tools and caches
+.venv/
+.venv-*/
+/.tools/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 node_modules/
 dist/
-/.tools/

@@ -32,6 +32,9 @@
   .sheet { position:fixed; inset:0; background:var(--bg); overflow:auto; padding:24px 20px max(24px, env(safe-area-inset-bottom)); }
   .sheet h1 { font-size:24px; margin:0 0 12px; } .sheet p, .sheet li { color:#d6d2c9; } .sheet button { width:100%; margin-top:12px; padding:16px; font-size:18px; }
   #reference { width:100%; max-height:40vh; object-fit:contain; border-radius:8px; background:#000; }
+  .sheet h2 { font-size:18px; margin:28px 0 6px; }
+  .upload { display:block; margin-top:12px; padding:16px; text-align:center; font-weight:600; border:1px solid #4a4f57; border-radius:8px; background:#2a2e34; }
+  .upload input { position:absolute; opacity:0; width:1px; height:1px; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -67,6 +70,10 @@
     <button id="resume">Continue that scan</button>
   </div>
   <p id="introError" role="alert"></p>
+  <h2>No live camera?</h2>
+  <p>If the camera or motion access is blocked or unsupported, take 40–60 photos with the phone's camera app instead, walking all the way around the object at two or three heights, then upload them. These photos get quality checks but no angle guidance.</p>
+  <label class="upload">Upload photos <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+  <p id="uploadStatus" role="status"></p>
 </section>
 
 <section class="sheet" id="realign" hidden>
@@ -267,6 +274,35 @@ $('finish').onclick = async () => {
   } catch (error) { stickyAlert(error.message, 'bad', 3500); }
 };
 $('again').onclick = () => location.reload();
+
+// Fallback without a live camera: upload gallery photos into one scan; finish once 12 or more are accepted.
+let uploadScan = null;
+$('files').onchange = async event => {
+  const files = [...event.target.files];
+  event.target.value = '';
+  if (!files.length) return;
+  const status = $('uploadStatus'), problems = [];
+  try {
+    uploadScan ??= (await api('/api/scans', { method: 'POST' })).id;
+    for (const [index, file] of files.entries()) {
+      status.textContent = `Uploading ${index + 1} of ${files.length}…`;
+      if (file.size > 25 * 1024 * 1024) { problems.push(`${file.name}: over 25 MB`); continue; }
+      const result = await api(`/api/scans/${uploadScan}/photos?imported=true`,
+        { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+      if (!result.accepted) problems.push(`${file.name}: ${result.reason}`);
+    }
+    const scan = await api(`/api/scans/${uploadScan}`);
+    if (scan.photos.length < 12) {
+      status.textContent = `${scan.photos.length} photos accepted; upload at least 12. ${problems.join(' · ')}`;
+      return;
+    }
+    const finished = await api(`/api/scans/${uploadScan}/finish`, { method: 'POST' });
+    $('doneText').textContent = `${finished.photos.length} uploaded photos saved.` + (problems.length ? ` Skipped: ${problems.join(' · ')}` : '');
+    $('intro').hidden = true; $('done').hidden = false; uploadScan = null;
+  } catch (error) {
+    status.textContent = `Upload failed: ${error.message}`;
+  }
+};
 function stop() {
   clearInterval(loop);
   stream?.getTracks().forEach(track => track.stop()); stream = null;

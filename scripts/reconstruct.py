@@ -9,7 +9,7 @@ import uuid
 
 from backend.app.config import ROOT, load_settings
 from backend.app.reconstruction import reconstruct
-from backend.app.images import decode_jpeg
+from backend.app.images import MAX_UPLOAD_BYTES, decode_jpeg
 
 
 def main() -> int:
@@ -31,10 +31,10 @@ def main() -> int:
     shape = None
     try:
         for index, source in enumerate(files):
-            if source.stat().st_size > 5 * 1024 * 1024:
-                raise ValueError(f'{source.name} exceeds the 5 MB frame limit')
+            if source.stat().st_size > MAX_UPLOAD_BYTES:
+                raise ValueError(f'{source.name} exceeds the 25 MB photo limit')
             data = source.read_bytes()
-            _, shape = decode_jpeg(data, shape)
+            _, shape = decode_jpeg(data, shape, MAX_UPLOAD_BYTES)
             (images / f'kf_{index:04d}.jpg').write_bytes(data)
         started = time.monotonic()
         result = reconstruct(images, output, settings)

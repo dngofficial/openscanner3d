@@ -1,4 +1,5 @@
 """Phone capture API: access control, photo checks, angle bookkeeping, finish/ZIP, reconstruction start."""
+import io
 import json
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from backend.app import coverage, main as server, network
 from backend.app.config import Settings
@@ -101,6 +103,22 @@ class CaptureTests(ApiTestCase):
         undone = phone.delete(f"/api/scans/{scan_id}/photos/last").json()
         self.assertEqual(undone["removed"], "kf_0001.jpg")
         self.assertFalse((self.root / scan_id / "images/kf_0001.jpg").exists())
+
+    def test_imported_photos_are_normalised_and_originals_kept(self):
+        phone = self.phone()
+        scan_id = phone.post("/api/scans").json()["id"]
+        image = Image.open(io.BytesIO(photo(5, width=1600, height=1200)))
+        exif = image.getexif(); exif[274] = 6  # Stored sideways, displayed portrait.
+        upload = io.BytesIO(); image.save(upload, format="JPEG", exif=exif)
+        result = phone.post(f"/api/scans/{scan_id}/photos?imported=true&azimuth=10&pitch=10", content=upload.getvalue(),
+                            headers={"content-type": "image/jpeg"}).json()
+        self.assertTrue(result["accepted"], result)
+        self.assertIsNone(result["ring"])  # Gallery photos carry no angle data, whatever the query says.
+        with Image.open(self.root / scan_id / "images" / "kf_0000.jpg") as working:
+            self.assertEqual(working.size, (1200, 1600))
+        self.assertEqual((self.root / scan_id / "originals" / "kf_0000.jpg").read_bytes(), upload.getvalue())
+        bad = phone.post(f"/api/scans/{scan_id}/photos?imported=true", content=b"nope", headers={"content-type": "image/jpeg"}).json()
+        self.assertIn("readable photo", bad["reason"])
 
     def test_finish_writes_zip_with_poses_and_locks_the_scan(self):
         phone = self.phone()
