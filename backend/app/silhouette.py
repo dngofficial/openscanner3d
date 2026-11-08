@@ -26,7 +26,7 @@ import numpy as np
 
 CAMERA_MODELS = {0: ("SIMPLE_PINHOLE", 3), 1: ("PINHOLE", 4), 2: ("SIMPLE_RADIAL", 4), 3: ("RADIAL", 5), 4: ("OPENCV", 8)}
 MASK_SCALE = .4            # GrabCut runs on downscaled photos; masks are scaled back up.
-GRID = 128                 # Voxels per side of the search box.
+GRID = 160                 # Voxels per side of the search box.
 BOX_RADIUS, BOX_HEIGHT = .3, .9   # Search box around the object, relative to the camera orbit radius.
 
 
@@ -195,7 +195,11 @@ def grabcut_masks(scene, photos: dict, region) -> dict:
             chosen = np.isin(state, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8)
         else:
             chosen = likely
-        masks[image["name"]] = cv2.resize(chosen, full.shape[1::-1], interpolation=cv2.INTER_NEAREST) > 0
+        # Remove specks, then scale up smoothly so the outline has no pixel staircase at full size.
+        chosen = cv2.morphologyEx(chosen, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        chosen = cv2.morphologyEx(chosen, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        smooth = cv2.GaussianBlur(chosen.astype(np.float32), (5, 5), 0)
+        masks[image["name"]] = cv2.resize(smooth, full.shape[1::-1], interpolation=cv2.INTER_LINEAR) > .5
     return masks
 
 
@@ -218,9 +222,14 @@ def carve(scene, masks: dict, grid=GRID):
         inside[visible] += mask[row[visible], col[visible]]
     views = len(masks)
     tolerance = max(1, round(.06 * views))
-    occupied = (seen >= max(3, views // 4)) & (inside >= seen - tolerance)
+    missing = seen - inside
+    enough = seen >= max(3, views // 4)
+    # Soft score: positive inside (at most `tolerance` outlines disagree), negative outside. Meshing this
+    # blurred score instead of yes/no voxels gives a smooth surface without a staircase.
+    score = np.where(enough, tolerance + .5 - missing, -tolerance - .5).astype(np.float32).reshape(grid, grid, grid)
+    from scipy import ndimage
     from skimage import measure
-    labels = measure.label(occupied.reshape(grid, grid, grid))
+    labels = measure.label(score > 0)
     sizes = np.bincount(labels.ravel())
     sizes[0] = 0
     if not sizes.max():
@@ -228,17 +237,21 @@ def carve(scene, masks: dict, grid=GRID):
     volume = labels == sizes.argmax()
     if volume.mean() > .5:
         raise ValueError("The outlines did not isolate an object (more than half the search box is filled)")
-    return volume, (radius, height)
+    keep = ndimage.binary_dilation(volume, iterations=2)
+    score = np.where(keep, score, -tolerance - .5)
+    return volume, ndimage.gaussian_filter(score, 1.0), (radius, height)
 
 
-def mesh_volume(volume, box, smooth=30):
+def mesh_volume(score, box, smooth=8):
     import trimesh
     from skimage import measure
     radius, height = box
-    grid = volume.shape[0]
-    vertices, faces, _, _ = measure.marching_cubes(np.pad(volume, 1).astype(np.float32), .5)
+    grid = score.shape[0]
+    vertices, faces, _, _ = measure.marching_cubes(np.pad(score, 1, constant_values=score.min()), 0.0)
     vertices = (vertices - .5) / grid * [2 * radius, 2 * radius, height] + [-radius, -radius, 0]
     mesh = trimesh.Trimesh(vertices, faces, process=True)
+    parts = mesh.split(only_watertight=False) if len(mesh.faces) else [mesh]
+    mesh = max(parts, key=lambda part: len(part.faces))
     trimesh.smoothing.filter_taubin(mesh, iterations=smooth)
     return mesh
 
@@ -302,15 +315,15 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
         box = [[BOX_RADIUS * scene.orbit * np.cos(a), BOX_RADIUS * scene.orbit * np.sin(a), z]
                for a in np.linspace(0, 2 * np.pi, 24, endpoint=False) for z in (0, BOX_HEIGHT * scene.orbit)]
         masks = grabcut_masks(scene, photos, scene.world(box))
-        volume, extent = carve(scene, masks, grid=96)
+        volume, _, extent = carve(scene, masks, grid=96)
         steps = (np.arange(96) + .5) / 96
         r, h = extent
         cells = np.argwhere(volume)
         region = np.c_[-r + 2 * r * steps[cells[:, 0]], -r + 2 * r * steps[cells[:, 1]], h * steps[cells[:, 2]]]
         masks = grabcut_masks(scene, photos, scene.world(region[:: max(1, len(region) // 4000)]))
         source = "GrabCut outlines (2 passes)"
-    volume, extent = carve(scene, masks)
-    mesh = mesh_volume(volume, extent)
+    volume, score, extent = carve(scene, masks)
+    mesh = mesh_volume(score, extent)
     coloured = colour(mesh, scene, photos, masks)
     mesh.apply_translation([0, 0, -mesh.bounds[0, 2]])  # Stand it on z = 0.
     export = y_up(mesh)

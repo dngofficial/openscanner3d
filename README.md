@@ -49,11 +49,11 @@ Without `lan = true`, the scanner runs on `http://localhost:8000` for the laptop
 
 ## Scanning
 
-The phone page tells you where to go next. It covers **12 sides × 3 heights**: two photos per side at low and middle height, one from high above, 60 in total. Photos are taken automatically when you reach a missing angle and hold still, and each is checked on the laptop (exposure, then sharpness, then contrast; a rejection names the cause with its measured value). Full instructions, the checklist map and troubleshooting are in [docs/PHONE_SETUP.md](docs/PHONE_SETUP.md).
+The phone page tells you where to go next. It covers **12 sides × 3 heights**: one photo per side at each height, 36 in total. Photos are taken automatically when you reach a missing angle and hold still, and each is checked on the laptop (exposure, then sharpness, then contrast; a rejection names the cause with its measured value). Full instructions, the checklist map and troubleshooting are in [docs/PHONE_SETUP.md](docs/PHONE_SETUP.md).
 
 The angles come from the phone's motion sensors and assume you keep the object centred while walking around it. They are coverage guidance stored with each photo (`poses.json`), not measured camera poses.
 
-**No live camera?** If camera or motion access is blocked or unsupported, the phone page offers **Upload photos**: take 40–60 photos with the camera app and upload them. They are turned upright and limited to 3200 px, the originals are kept in `originals/`, and they get the same quality checks but no angle data.
+**No live camera?** If camera or motion access is blocked or unsupported, the phone page offers **Upload photos**: take 36–48 photos with the camera app and upload them. They are turned upright and limited to 3200 px, the originals are kept in `originals/`, and they get the same quality checks but no angle data.
 
 ## On the laptop
 

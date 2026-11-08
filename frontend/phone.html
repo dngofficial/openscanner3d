@@ -50,7 +50,7 @@
   <div class="bottom">
     <canvas id="map" width="340" height="340" aria-label="Angle checklist: outer ring low, inner ring high; your position is the white dot"></canvas>
     <div class="controls">
-      <div id="count">0 <small>/ 60 angles</small></div>
+      <div id="count">0 <small>/ 36 angles</small></div>
       <div class="row"><button id="captureNow">Capture now</button><button id="undo">Undo</button></div>
       <button id="finish" class="go">Finish</button>
     </div>
@@ -74,7 +74,7 @@
   </div>
   <p id="introError" role="alert"></p>
   <h2>No live camera?</h2>
-  <p>If the camera or motion access is blocked or unsupported, take 40–60 photos with the phone's camera app instead, walking all the way around the object at two or three heights, then upload them. These photos get quality checks but no angle guidance.</p>
+  <p>If the camera or motion access is blocked or unsupported, take 36–48 photos with the phone's camera app instead, walking all the way around the object at two or three heights, then upload them. These photos get quality checks but no angle guidance.</p>
   <label class="upload">Upload photos <input id="files" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
   <p id="uploadStatus" role="status"></p>
 </section>
@@ -268,6 +268,11 @@ $('undo').onclick = async () => {
   } catch (error) { stickyAlert(error.message, 'bad'); }
 };
 $('finish').onclick = async () => {
+  // Low-angle photos define the object's lower sides; scans taken only from above come out vague there.
+  const lowSides = counts?.[0]?.filter(count => count > 0).length ?? 0;
+  if (orientation && lowSides < plan.sectors / 2
+      && !confirm(`Only ${lowSides} of ${plan.sectors} sides have a low-angle photo (phone near table height). `
+                  + 'The bottom of the object will be less accurate. Finish anyway?')) return;
   try {
     const scan = await api(`/api/scans/${scanId}/finish`, { method: 'POST' });
     stop();

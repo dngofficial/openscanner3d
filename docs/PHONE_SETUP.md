@@ -54,11 +54,10 @@ Never bypass a browser certificate warning instead: the camera and sensors would
    - **Walk left / right about N° around the object**: move to the next missing side.
    - **Raise the phone and look down** / **Lower the phone**: change height.
    - **Hold still. Capturing this angle.**: the photo is taken automatically when the phone is steady and the light is OK.
-   - **Shift a small step sideways**: the side needs a second, slightly different view.
 
    A green flash plus a vibration (Android) or beep confirms a saved photo. A rejection shows the reason, such as "Blurry (sharpness 18, need 25)".
 6. The ring at the bottom left is the checklist, seen from above with the object in the middle. The outer ring is low angle and the inner ring is high angle; the start side is at the bottom. Grey means missing, amber partly done, teal done, and a white outline is the next target. The white dot is you.
-7. Tap **Finish** when the count reaches 60, or earlier if some angles are impossible. The laptop page then offers `scan.zip` and, in reconstruct mode, **Reconstruct**.
+7. Tap **Finish** when the count reaches 36, or earlier if some angles are impossible. The laptop page then offers `scan.zip` and, in reconstruct mode, **Reconstruct**.
 
 **Tips:**
 - **Fill the dashed circle with the object.** In the first real scan the bottle filled about a tenth of the frame width, leaving too few pixels for detail.
@@ -99,7 +98,7 @@ its current QR: restarting the server invalidates previous links. The login cook
 
 ## Acceptance checklist (record results)
 
-- [ ] iPhone: certificate trusted, page opens over HTTPS, camera and motion permission work, guided scan reaches 60/60.
+- [ ] iPhone: certificate trusted, page opens over HTTPS, camera and motion permission work, guided scan reaches 36/36.
 - [ ] Android (Samsung): same, plus vibration feedback.
 - [ ] Permission denied and sensors denied each give a clear message and a usable fallback.
 - [ ] Laptop restart: the old key is rejected and the new QR code works.

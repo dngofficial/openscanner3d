@@ -4,7 +4,7 @@ Keep recordings, scans and generated models out of Git. `scans/` and `sample-dat
 
 Before presenting the demo, record:
 
-- Where the input came from: object, capture conditions, guided-scan coverage (angles covered out of 60), and permissions.
+- Where the input came from: object, capture conditions, guided-scan coverage (angles covered out of 36), and permissions.
 - Exact tool versions and commands for reconstruction.
 - Runtime, image registration results, output location and visible defects.
 - An inspection of the real `mesh.glb` in Blender.

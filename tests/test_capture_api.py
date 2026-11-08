@@ -176,8 +176,8 @@ class CaptureTests(ApiTestCase):
     def test_coverage_summary(self):
         poses = [dict(ring=0, sector=0), dict(ring=0, sector=0), dict(ring=0, sector=0), dict(ring=2, sector=5), dict(ring=None)]
         summary = coverage.summarise(poses)
-        self.assertEqual(summary["have"], 3)  # Extra photos of a full side do not count twice.
-        self.assertEqual(summary["wanted"], 60)
+        self.assertEqual(summary["have"], 2)  # Extra photos of a full side do not count twice.
+        self.assertEqual(summary["wanted"], 36)
         self.assertEqual(summary["unguided"], 1)
         self.assertEqual([coverage.ring_of(p) for p in (-20, 0, 30, 60, 89)], [None, 0, 1, 2, None])
 
