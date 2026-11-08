@@ -164,9 +164,45 @@ class Scene:
 def _outline(points, camera, R, t, shape):
     pixels, front = project(points, camera, R, t)
     mask = np.zeros(shape, np.uint8)
-    pixels = pixels[front] * MASK_SCALE
+    pixels = pixels[front & np.isfinite(pixels).all(1)] * MASK_SCALE
     if len(pixels) >= 3:
+        pixels = np.clip(pixels, -4 * max(shape), 4 * max(shape))  # Points grazing the camera plane.
         cv2.fillConvexPoly(mask, cv2.convexHull(pixels.astype(np.float32)).astype(np.int32), 1)
+    return mask
+
+
+def _clip_polygon(polygon, distance):
+    """Part of a closed convex polygon where distance(point) >= 0 (one Sutherland-Hodgman step)."""
+    d, kept = distance(polygon), []
+    for i in range(len(polygon)):
+        j = (i + 1) % len(polygon)
+        if d[i] >= 0:
+            kept.append(polygon[i])
+        if (d[i] >= 0) != (d[j] >= 0):
+            kept.append(polygon[i] + (polygon[j] - polygon[i]) * d[i] / (d[i] - d[j]))
+    return np.array(kept, float).reshape(-1, polygon.shape[1])
+
+
+VIEW_LIMIT = 1.5  # |x/z| and |y/z| kept before projection: wider than a phone's view, inside the lens model's range.
+
+
+def _polygon_mask(polygon, camera, R, t, shape):
+    """Fill a planar convex 3D polygon (e.g. the table) as seen by a camera.
+
+    A large polygon can pass beside or behind the camera; projecting its corners directly gives huge or
+    wrapped pixels. Clip it to the view cone in camera coordinates first, then project what is left.
+    """
+    local = np.asarray(polygon, float) @ R.T + t
+    for distance in (lambda p: p[:, 2] - 1e-6,
+                     lambda p: VIEW_LIMIT * p[:, 2] - p[:, 0], lambda p: VIEW_LIMIT * p[:, 2] + p[:, 0],
+                     lambda p: VIEW_LIMIT * p[:, 2] - p[:, 1], lambda p: VIEW_LIMIT * p[:, 2] + p[:, 1]):
+        if len(local) < 3:
+            break
+        local = _clip_polygon(local, distance)
+    mask = np.zeros(shape, np.uint8)
+    if len(local) >= 3:
+        pixels, _ = project(local, camera, np.eye(3), np.zeros(3))  # Already in the camera frame.
+        cv2.fillConvexPoly(mask, np.round(pixels * MASK_SCALE).astype(np.int32), 1)
     return mask
 
 
@@ -185,7 +221,7 @@ def grabcut_masks(scene, photos: dict, region) -> dict:
             continue
         near = cv2.dilate(likely, np.ones((int(.04 * width) | 1,) * 2, np.uint8))
         state = np.full((height, width), cv2.GC_PR_BGD, np.uint8)
-        state[(_outline(table, camera, R, t, (height, width)) == 1) & (near == 0)] = cv2.GC_BGD  # Table: background.
+        state[(_polygon_mask(table, camera, R, t, (height, width)) == 1) & (near == 0)] = cv2.GC_BGD  # Table: background.
         state[likely == 1] = cv2.GC_PR_FGD
         rows, cols = np.nonzero(near)
         pad = int(.05 * width)

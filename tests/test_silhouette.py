@@ -129,6 +129,19 @@ class SilhouetteTests(unittest.TestCase):
                     handle.write(struct.pack("<Q3d3Bd", number, *xyz, 9, 9, 9, .5) + struct.pack("<Q", 2) + struct.pack("<4i", 1, 0, 2, 3))
             np.testing.assert_allclose(silhouette.read_points3d(Path(temp) / "points3D.bin"), [[1, 2, 3], [4, 5, 6]])
 
+    def test_table_polygon_passing_behind_the_camera_is_clipped(self):
+        # Camera at the origin looking along +z (y down); the floor at y=1 stretches from behind it to z=10.
+        camera = ("PINHOLE", 250, 250, np.array([250.0, 250.0, 250.0, 250.0]))
+        floor = np.array([[-10, 1, -10], [10, 1, -10], [10, 1, 10], [-10, 1, 10]], float)
+        shape = (200, 200)  # 500 px photo at MASK_SCALE 0.4.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            mask = silhouette._polygon_mask(floor, camera, np.eye(3), np.zeros(3), shape)
+        # Rows below v = 250 + 250 * (1 / 10) = 275 px (110 at mask scale) see the floor; above the horizon nothing.
+        self.assertTrue(mask[115:].all())
+        self.assertFalse(mask[:100].any())
+
     def test_refuses_scenes_without_a_table_or_enough_photos(self):
         with tempfile.TemporaryDirectory() as temp:
             workspace, images = build_scene(Path(temp))
