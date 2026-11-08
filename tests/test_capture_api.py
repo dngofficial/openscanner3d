@@ -173,6 +173,36 @@ class CaptureTests(ApiTestCase):
                 import time; time.sleep(.05)
         self.assertEqual(status["state"], "ready")
 
+    def test_first_tap_is_stored_and_object_rebuild_runs_in_background(self):
+        phone = self.phone()
+        scan_id = phone.post("/api/scans").json()["id"]
+        for index in range(12):
+            tap = "&tap_x=0.48&tap_y=0.52" if index < 2 else ""
+            phone.post(f"/api/scans/{scan_id}/photos?azimuth={index * 30}&pitch=10{tap}", content=photo(index + 60),
+                       headers={"content-type": "image/jpeg"})
+        bad = phone.post(f"/api/scans/{scan_id}/photos?tap_x=1.5&tap_y=0.5", content=photo(99), headers={"content-type": "image/jpeg"})
+        self.assertEqual(bad.status_code, 422)
+        poses = json.loads((self.root / scan_id / "poses.json").read_text())
+        self.assertEqual(poses[0]["tap"], [0.48, 0.52])
+        self.assertNotIn("tap", poses[1])  # Only the first tap prompts the segmenter.
+        self.local.post(f"/api/scans/{scan_id}/finish")
+        with patch.object(server, "SETTINGS", Settings(lan=True, mode="reconstruct")):
+            self.assertEqual(self.local.post(f"/api/scans/{scan_id}/object?detail=low").status_code, 409)  # No run yet.
+            (self.root / scan_id / "run.json").write_text('{"run": "abc"}')
+            self.assertEqual(self.local.post(f"/api/scans/{scan_id}/object?detail=huge").status_code, 422)
+            done = dict(msg="Object rebuilt.", done=True, model_ready=True)
+            with patch.object(server, "rebuild_object", return_value=done) as rebuild:
+                self.assertEqual(self.local.post(f"/api/scans/{scan_id}/object?detail=low").status_code, 202)
+                for _ in range(50):
+                    status = self.local.get(f"/api/scans/{scan_id}").json()["status"]
+                    if status["state"] != "running":
+                        break
+                    import time; time.sleep(.05)
+            self.assertEqual(status["state"], "ready")
+            self.assertEqual(rebuild.call_args.args[2], "low")
+        self.assertTrue(self.local.get(f"/api/scans/{scan_id}").json()["rebuildable"])
+        self.assertEqual(self.local.get(f"/scans/{scan_id}/masks/../poses.json").status_code, 404)
+
     def test_coverage_summary(self):
         poses = [dict(ring=0, sector=0), dict(ring=0, sector=0), dict(ring=0, sector=0), dict(ring=2, sector=5), dict(ring=None)]
         summary = coverage.summarise(poses)

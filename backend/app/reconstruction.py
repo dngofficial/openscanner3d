@@ -1,16 +1,88 @@
 """Bounded adapter around the existing, experimental COLMAP mesh pipeline."""
+import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 import uuid
 
-from .config import Settings, resolve_tool
+from .ai_masks import make_segmenter
+from .config import DETAIL, Settings, resolve_tool
 from .silhouette import reconstruct_object
 
 _heavy_job = threading.Lock()
 REQUIRED_FLAGS = ("--workspace_path", "--image_path", "--quality", "--single_camera", "--mesher")
 OBJECT_FILES = ("object.glb", "object_hires.glb", "object.obj", "object.mtl", "object_albedo.png")
+PREVIEWS = "mask_previews"
+
+
+def object_step(workspace: Path, images: Path, output: Path, settings: Settings, detail: str) -> dict:
+    """Object model from an existing COLMAP run, built in a staging folder and moved into output only on success."""
+    triangles, texture = DETAIL[detail]
+    staging = workspace / f"object_{uuid.uuid4().hex[:8]}"
+    info = reconstruct_object(workspace, images, staging, target_triangles=triangles, texture_size=texture,
+                              segment=make_segmenter(settings, workspace), mask_cache=workspace / "object_masks",
+                              previews=staging / PREVIEWS)
+    if not (staging / "object_hires.glb").is_file():
+        raise ValueError("No object mesh was written")
+    for name in OBJECT_FILES:
+        if (staging / name).is_file():
+            os.replace(staging / name, output / name)
+        else:
+            (output / name).unlink(missing_ok=True)  # e.g. a failed game asset: never keep an older one beside it.
+    if (staging / PREVIEWS).is_dir():
+        shutil.rmtree(output / PREVIEWS, ignore_errors=True)
+        os.replace(staging / PREVIEWS, output / PREVIEWS)
+    info["detail"] = detail
+    (output / "object.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    shutil.rmtree(staging, ignore_errors=True)
+    return info
+
+
+def describe_object(info: dict) -> str:
+    masks = info.get("masks") or {}
+    outline = masks.get("method", "outlines")
+    if masks.get("sam2"):
+        outline = f"SAM 2 masks in {masks['sam2']} of {masks['sam2'] + masks.get('grabcut', 0)} photos"
+    message = f"Object from {info['photos']} photos ({outline}): object_hires.glb ({info['faces']} faces)."
+    if info["clipped"]:
+        message += " It touches the search box edge, so part may be cut off."
+    if info.get("game_asset"):
+        message += (f" Game asset ({info.get('detail', 'standard')} detail): object.glb "
+                    f"({info['game_asset']['triangles']} triangles, photo-baked texture).")
+    if info.get("warnings"):
+        message += " " + " ".join(info["warnings"])
+    return message
+
+
+def newest_run(scan: Path) -> Path | None:
+    try:
+        run = scan / "runs" / json.loads((scan / "run.json").read_text(encoding="utf-8"))["run"]
+        if (run / "sparse" / "0" / "images.bin").is_file():
+            return run
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    runs = [run for run in (scan / "runs").glob("*") if (run / "sparse" / "0" / "images.bin").is_file()]
+    return max(runs, key=lambda run: run.stat().st_mtime) if runs else None
+
+
+def rebuild_object(scan: Path, settings: Settings, detail: str) -> dict:
+    """Rerun only the object step (e.g. a lower triangle budget). The previous object stays if this fails."""
+    if not _heavy_job.acquire(blocking=False):
+        return dict(msg="Another reconstruction is running.", lvl="warn", done=False)
+    try:
+        workspace = newest_run(scan)
+        if workspace is None:
+            return dict(msg="No finished COLMAP run for this scan. Reconstruct it first.", lvl="bad", done=False)
+        info = object_step(workspace, scan / "images", scan, settings, detail)
+        return dict(msg=describe_object(info), lvl="warn" if info["clipped"] or info.get("warnings") else "ok",
+                    done=True, model_ready=True, object=info)
+    except (ValueError, OSError) as error:
+        return dict(msg=f"Object rebuild failed: {error}. The previous object files are unchanged.", lvl="bad",
+                    done=False, model_ready=True)
+    finally:
+        _heavy_job.release()
 
 
 def colmap_help(executable: str) -> str:
@@ -77,24 +149,18 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
         for extension in ("obj", "glb"):
             os.replace(workspace / f"mesh.{extension}", output / f"mesh.{extension}")
         message = "Scene mesh exported (COLMAP dense + Poisson)."
-        for name in OBJECT_FILES:
+        (output / "run.json").write_text(json.dumps(dict(run=workspace.name)), encoding="utf-8")
+        for name in (*OBJECT_FILES, "object.json"):
             (output / name).unlink(missing_ok=True)
+        shutil.rmtree(output / PREVIEWS, ignore_errors=True)
         try:
             # Plain objects give dense stereo little to work with; their outlines still define the shape.
-            info = reconstruct_object(workspace, images, workspace)
-            for name in OBJECT_FILES:
-                if (workspace / name).is_file():
-                    os.replace(workspace / name, output / name)
-            message += (f" Object from {info['photos']} outlines: object_hires.glb ({info['faces']} faces, vertex colours)."
-                        + (" It touches the search box edge, so part may be cut off." if info["clipped"] else ""))
-            if info.get("game_asset"):
-                message += f" Game asset: object.glb ({info['game_asset']['triangles']} triangles, photo-baked texture)."
-            if info.get("warnings"):
-                message += " " + " ".join(info["warnings"])
-            return dict(msg=message, lvl="warn" if info["clipped"] or info.get("warnings") else "ok",
+            info = object_step(workspace, images, output, settings, settings.detail)
+            return dict(msg=f"{message} {describe_object(info)}",
+                        lvl="warn" if info["clipped"] or info.get("warnings") else "ok",
                         done=True, model_ready=True, object=info)
         except (ValueError, OSError, np.linalg.LinAlgError) as error:
-            for name in OBJECT_FILES:
+            for name in (*OBJECT_FILES, "object.json"):
                 (output / name).unlink(missing_ok=True)  # Never pair a new scene with an old object.
             return dict(msg=f"{message} Object reconstruction failed: {error}.", lvl="warn", done=True, model_ready=True)
     except subprocess.TimeoutExpired:

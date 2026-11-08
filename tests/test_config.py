@@ -18,7 +18,8 @@ class ConfigurationTests(unittest.TestCase):
             path = Path(root) / "config.toml"
             self.assertEqual(load_settings(path).mode, "capture")
             for content in ('mode = "cloud"', 'max_photos = 0', 'timeout_seconds = "forever"', 'unknown = 3',
-                            'lan = "yes"', 'port = 80', 'tls_cert = ""'):
+                            'lan = "yes"', 'port = 80', 'tls_cert = ""', 'masks = "magic"', 'detail = "ultra"',
+                            'segmentation_device = "tpu"', 'sam2_checkpoint = 3'):
                 path.write_text(content)
                 with self.assertRaises(ValueError):
                     load_settings(path)

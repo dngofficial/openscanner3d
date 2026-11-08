@@ -40,6 +40,9 @@
   .cue.down { left:50%; top:calc(46% + 31vmin + 34px); transform:translateX(-50%); }
   @media (prefers-reduced-motion:no-preference) { .cue { animation:nudge 1s ease-in-out infinite; } }
   @keyframes nudge { 50% { opacity:.55; } }
+  #tapMark { position:fixed; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%; border:3px solid #fff;
+             background:rgba(63,184,160,.45); box-shadow:0 0 0 3px rgba(0,0,0,.35); pointer-events:none; }
+  #skipTap { margin-top:8px; font-size:14px; min-height:40px; padding:8px 14px; }
   #flash { position:fixed; inset:0; border:10px solid var(--ok); opacity:0; transition:opacity .45s; pointer-events:none; }
   #flash.on { opacity:1; transition:none; }
   .bottom { position:absolute; left:10px; right:10px; bottom:max(10px, env(safe-area-inset-bottom)); display:grid;
@@ -81,6 +84,7 @@
 <body>
 <video id="video" playsinline muted autoplay></video>
 <div id="flash"></div>
+<div id="tapMark" hidden></div>
 
 <div class="hud" id="hud" hidden>
   <div class="top">
@@ -90,6 +94,7 @@
       <span class="chip" id="chipSteady">Steady</span>
       <span class="chip" id="chipAngles">Angles</span>
     </div>
+    <button id="skipTap" hidden>Skip: take photos without tapping</button>
   </div>
   <div id="target"><span>Fill this circle with the object</span></div>
   <div class="cue left" id="cueLeft" hidden aria-hidden="true">‹</div>
@@ -121,7 +126,7 @@
     <li><svg viewBox="0 0 44 44" aria-hidden="true"><rect x="6" y="28" width="32" height="5" rx="2" fill="#5b6067"/><rect x="17" y="10" width="10" height="18" rx="3" fill="#3fb8a0"/></svg>
       <div><b>Place it on a table you can walk around</b><span>Plain, contrasting surface. It must not move.</span></div></li>
     <li><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="5 4"/><rect x="16" y="11" width="12" height="22" rx="3" fill="#3fb8a0"/></svg>
-      <div><b>Fill the circle with the object</b><span>Stand close and keep it centred.</span></div></li>
+      <div><b>Fill the circle, then tap the object</b><span>One tap on screen takes the first photo and tells the AI which object to cut out.</span></div></li>
     <li><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="16" fill="none" stroke="#3a3f46" stroke-width="7"/><path d="M22 6a16 16 0 0 1 16 16" fill="none" stroke="#3fb8a0" stroke-width="7"/></svg>
       <div><b>Fill the dial at three heights</b><span>Low, middle and from above. Photos are taken when you hold still.</span></div></li>
   </ol>
@@ -164,6 +169,7 @@ probe.width = 48; probe.height = 36;
 const probeContext = probe.getContext('2d', { willReadFrequently: true });
 let plan, scanId = null, counts, shots = {}, order = [], heading0 = null, orientation = null, motion = [], motionSeen = false;
 let stream = null, inFlight = false, lastCapture = 0, sticky = null, audio = null, wakeLock = null, ticks = 0, exposure = null, loop = null;
+let awaitingTap = false;  // First photo: the user taps the object, which prompts SAM 2 on the laptop.
 let photos = 0, autoCapture = true, soundOn = localStorage.getItem('scanner-sound') !== 'off';
 const STORE = 'scanner-current-scan';
 const MIN_PHOTOS = 12;
@@ -261,6 +267,7 @@ async function begin(resumeId) {
       }
     } else {
       scanId = (await api('/api/scans', { method: 'POST' })).id; counts = emptyCounts(); shots = {}; order = []; photos = 0;
+      awaitingTap = true;
     }
     localStorage.setItem(STORE, scanId);
     startScanning();
@@ -272,7 +279,7 @@ async function begin(resumeId) {
 }
 
 function startScanning() {
-  $('intro').hidden = true; $('realign').hidden = true; $('hud').hidden = false;
+  $('intro').hidden = true; $('realign').hidden = true; $('hud').hidden = false; $('skipTap').hidden = !awaitingTap;
   heading0 = headingNow();  // If the sensors have not reported yet, the first reading in tick() sets it.
   showProgress();
   clearInterval(loop);
@@ -305,11 +312,12 @@ function tick() {
   drawCoverage(map, 380, plan, counts, position, step.target || (step.kind === 'hold' ? { ring: step.ring, sector: step.sector } : null));
   if (sticky && now < sticky.until) { /* keep showing the last result */ }
   else if (exposure) say(exposure, 'bad');
+  else if (awaitingTap && !inFlight) say('Tap the object on screen to take the first photo.', 'warn');
   else if (inFlight) say('Saving photo…', 'ok');
   else if (step.kind === 'hold' && !autoCapture) say('Good angle. Tap the shutter (auto-capture is off).', 'ok');
   else if (step.kind === 'hold' && !steady) say('Hold still…', 'warn');
   else say(step.text, step.kind === 'hold' || step.kind === 'done' ? 'ok' : 'warn');
-  if (autoCapture && step.kind === 'hold' && steady && !exposure && !inFlight && now - lastCapture > 900) capture(position);
+  if (!awaitingTap && autoCapture && step.kind === 'hold' && steady && !exposure && !inFlight && now - lastCapture > 900) capture(position);
 }
 
 function setLastShot(name) {
@@ -317,7 +325,16 @@ function setLastShot(name) {
   $('lastShot').disabled = false;
 }
 
-async function capture(position) {
+// Screen point -> fraction of the camera frame (the video fills the screen with object-fit: cover).
+function frameFraction(clientX, clientY) {
+  const rect = video.getBoundingClientRect(), scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
+  const x = (clientX - rect.left - (rect.width - video.videoWidth * scale) / 2) / scale / video.videoWidth;
+  const y = (clientY - rect.top - (rect.height - video.videoHeight * scale) / 2) / scale / video.videoHeight;
+  return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+}
+function endTapStep() { awaitingTap = false; $('skipTap').hidden = true; setTimeout(() => { $('tapMark').hidden = true; }, 900); }
+
+async function capture(position, tap = null) {
   if (inFlight || !video.videoWidth) return;
   inFlight = true; lastCapture = performance.now();
   try {
@@ -325,10 +342,13 @@ async function capture(position) {
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
-    const query = position ? `?azimuth=${position.azimuth.toFixed(1)}&pitch=${position.pitch.toFixed(1)}` : '';
-    const result = await api(`/api/scans/${scanId}/photos${query}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+    const query = new URLSearchParams();
+    if (position) { query.set('azimuth', position.azimuth.toFixed(1)); query.set('pitch', position.pitch.toFixed(1)); }
+    if (tap) { query.set('tap_x', tap.x.toFixed(4)); query.set('tap_y', tap.y.toFixed(4)); }
+    const result = await api(`/api/scans/${scanId}/photos?${query}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
     if (result.accepted) {
       counts = result.coverage.counts; photos += 1; showProgress(); setLastShot(result.name);
+      if (tap) endTapStep();
       if (result.ring !== null) { const key = `${result.ring}:${result.sector}`; (shots[key] ||= []).push(position); order.push(key); }
       else order.push(null);
       $('flash').classList.add('on'); setTimeout(() => $('flash').classList.remove('on'), 60);
@@ -348,7 +368,16 @@ async function capture(position) {
 $('start').onclick = () => begin(null);
 $('resume').onclick = () => begin(localStorage.getItem(STORE));
 $('realignNow').onclick = () => startScanning();
-$('shutter').onclick = () => capture(here());
+$('shutter').onclick = () => { if (awaitingTap) endTapStep(); capture(here()); };
+video.addEventListener('click', event => {
+  if (!awaitingTap || inFlight || !video.videoWidth) return;
+  const tap = frameFraction(event.clientX, event.clientY);
+  if (!tap) return;
+  Object.assign($('tapMark').style, { left: `${event.clientX}px`, top: `${event.clientY}px` });
+  $('tapMark').hidden = false;
+  capture(here(), tap);
+});
+$('skipTap').onclick = () => endTapStep();
 $('auto').onclick = () => {
   autoCapture = !autoCapture;
   $('auto').setAttribute('aria-pressed', String(autoCapture)); $('auto').textContent = autoCapture ? 'Auto on' : 'Auto off';

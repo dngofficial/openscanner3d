@@ -22,6 +22,18 @@ class Settings:
     port: int = 8443
     tls_cert: str = "certs/lan.pem"
     tls_key: str = "certs/lan-key.pem"
+    # Object outlines: "auto" uses SAM 2 when its environment and checkpoint exist, else GrabCut.
+    masks: str = "auto"
+    segmentation_python: str = ""          # Empty: use .venv-sam2 in the repository if present.
+    sam2_checkpoint: str = "models/sam2.1_hiera_tiny.pt"
+    sam2_config: str = "configs/sam2.1/sam2.1_hiera_t.yaml"
+    segmentation_device: str = "auto"
+    # Game asset detail preset (triangle budget and texture size), see DETAIL.
+    detail: str = "standard"
+
+
+# Triangle budget and texture size of object.glb. "low" suits low-poly game props.
+DETAIL = {"low": (1000, 1024), "standard": (5000, 2048), "high": (20000, 4096)}
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -37,6 +49,13 @@ def load_settings(path: Path | None = None) -> Settings:
         raise ValueError("mode must be capture or reconstruct")
     if settings.quality not in {"low", "medium", "high"}:
         raise ValueError("quality must be low, medium, or high")
+    for key, allowed in (("masks", {"auto", "sam2", "grabcut"}), ("segmentation_device", {"auto", "cuda", "cpu"}),
+                         ("detail", set(DETAIL))):
+        if getattr(settings, key) not in allowed:
+            raise ValueError(f"{key} must be one of {', '.join(sorted(allowed))}")
+    for key in ("segmentation_python", "sam2_checkpoint", "sam2_config"):
+        if not isinstance(getattr(settings, key), str):
+            raise ValueError(f"{key} must be a string")
     if type(settings.lan) is not bool:
         raise ValueError("lan must be true or false")
     for key in ("tls_cert", "tls_key"):

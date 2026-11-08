@@ -59,6 +59,9 @@
   .fact { background:var(--raised); border-radius:8px; padding:10px; } .fact b { display:block; font-size:18px; }
   .downloads { display:flex; flex-wrap:wrap; gap:8px; }
   .thumbs { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px, 1fr)); gap:6px; }
+  .rebuild { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:12px; padding:10px; background:var(--raised); border-radius:8px; }
+  .rebuild .meta { flex:1 1 220px; }
+  .masks img { aspect-ratio:auto; object-fit:contain; }
   .thumbs img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; background:#000; }
   .spinner { width:14px; height:14px; border:2px solid var(--info); border-right-color:transparent; border-radius:50%; display:inline-block; }
   @media (prefers-reduced-motion:no-preference) { .spinner { animation:spin 1s linear infinite; } }
@@ -114,9 +117,20 @@
         <button id="resetView">Reset view</button>
         <span class="meta" id="modelStats"></span>
       </div>
+      <div class="rebuild" id="rebuild" hidden>
+        <label for="detailLevel"><b>Game asset detail</b></label>
+        <select id="detailLevel"></select>
+        <button id="rebuildGo">Rebuild object</button>
+        <span class="meta">Re-meshes the object from this scan's existing camera poses and masks; COLMAP does not rerun. The current files stay if it fails.</span>
+      </div>
       <div class="facts" id="facts"></div>
       <h3>Downloads</h3>
       <div class="downloads" id="downloads"></div>
+      <div id="masksBox" hidden>
+        <h3>Object masks</h3>
+        <p class="meta" id="masksText"></p>
+        <div class="thumbs masks" id="maskThumbs"></div>
+      </div>
       <h3>Photos</h3>
       <div class="thumbs" id="thumbs"></div>
     </div>
@@ -125,6 +139,7 @@
 <script type="module">
 import { drawCoverage } from '/guidance.mjs';
 const $ = id => document.getElementById(id);
+let details = null;
 let plan = null, mode = 'capture', selected = null, viewer = null, loadedModel = null, qrForced = false;
 const LABELS = {
   'object.glb': 'Object · GLB', 'object_hires.glb': 'Object, high detail · GLB', 'object.obj': 'Object · OBJ',
@@ -191,8 +206,8 @@ function listItem(scan) {
   return item;
 }
 
-async function showModel(scanId, file) {
-  const key = `${scanId}/${file}`;
+async function showModel(scanId, file, version = '') {
+  const key = `${scanId}/${file}/${version}`;
   if (loadedModel === key) return;
   loadedModel = key;
   $('modelStats').textContent = 'Loading…';
@@ -209,7 +224,7 @@ async function showModel(scanId, file) {
     loadedModel = null;
   }
 }
-$('model').onchange = () => showModel(selected, $('model').value);
+$('model').onchange = () => showModel(selected, $('model').value, $('model').dataset.version);
 for (const [id, apply] of [['wire', on => viewer?.setWireframe(on)], ['spin', on => viewer?.setTurntable(on)]]) {
   $(id).onclick = () => { const on = $(id).getAttribute('aria-pressed') !== 'true'; $(id).setAttribute('aria-pressed', String(on)); apply(on); };
 }
@@ -243,17 +258,21 @@ function renderDetail(scan) {
     const current = $('model').value;
     $('model').replaceChildren(...models.map(([file, name]) => new Option(name, file)));
     $('model').value = models.some(([file]) => file === current) ? current : models[0][0];
-    showModel(scan.id, $('model').value);
+    $('model').dataset.version = status?.finished || '';  // Reload after a rebuild replaces the files.
+    showModel(scan.id, $('model').value, $('model').dataset.version);
   } else {
     $('viewerEmpty').textContent = !scan.finished ? 'Finish the scan on the phone first.'
       : mode === 'reconstruct' ? 'Press Reconstruct to build the 3D model.' : 'Download the photos and reconstruct on the GPU laptop.';
     loadedModel = null;
   }
+  renderRebuild(scan);
+  renderMasks(scan);
   const covered = Math.round(100 * scan.coverage.have / scan.coverage.wanted);
   $('facts').innerHTML = '';
   for (const [value, name] of [[scan.photos.length, 'photos'], [`${covered}%`, 'angles covered'],
                                 [scan.size ? `${scan.size[0]}×${scan.size[1]}` : '–', 'photo size'],
-                                [scan.coverage.unguided || 0, 'without angle data']]) {
+                                [scan.coverage.unguided || 0, 'without angle data'],
+                                ...(scan.object?.triangles ? [[scan.object.triangles.toLocaleString(), `triangles · ${scan.object.detail} detail`]] : [])]) {
     const fact = document.createElement('div'); fact.className = 'fact';
     fact.innerHTML = '<b></b><span class="meta"></span>';
     fact.querySelector('b').textContent = value; fact.querySelector('.meta').textContent = name;
@@ -272,9 +291,52 @@ function renderDetail(scan) {
   }
 }
 
+function renderRebuild(scan) {
+  const show = mode === 'reconstruct' && scan.rebuildable && details && scan.status?.state !== 'running';
+  $('rebuild').hidden = !show;
+  if (!show) return;
+  if (!$('detailLevel').options.length) {
+    const names = { low: 'Low poly', standard: 'Standard', high: 'High' };
+    $('detailLevel').replaceChildren(...Object.entries(details).map(([key, value]) =>
+      new Option(`${names[key] || key} · ${value.triangles.toLocaleString()} triangles · ${value.texture} px texture`, key)));
+  }
+  if ($('rebuild').dataset.scan !== scan.id) {
+    $('rebuild').dataset.scan = scan.id;
+    $('detailLevel').value = scan.object?.detail || 'standard';
+  }
+  $('rebuildGo').onclick = async () => {
+    $('rebuildGo').disabled = true;
+    try { await json(`/api/scans/${scan.id}/object?detail=${$('detailLevel').value}`, { method: 'POST' }); }
+    catch (error) { $('status').textContent = error.message; }
+    $('rebuildGo').disabled = false;
+    refresh();
+  };
+}
+
+function renderMasks(scan) {
+  const masks = scan.masks;
+  $('masksBox').hidden = !masks;
+  if (!masks) return;
+  const total = (masks.sam2 || 0) + (masks.grabcut || 0);
+  const parts = masks.sam2
+    ? [`SAM 2 (pretrained segmentation, run on this laptop) outlined the object in ${masks.sam2} of ${total} photos`
+       + (masks.grabcut ? `; GrabCut kept ${masks.grabcut} where SAM 2 disagreed with the photo outline` : ''),
+       `prompted by ${masks.prompt}`, masks.device ? `${masks.device.toUpperCase()}, ${masks.seconds} s` : '']
+    : [`GrabCut outlines (classical computer vision) in all ${total} photos`, masks.note || ''];
+  $('masksText').textContent = parts.filter(Boolean).join(' · ') + '. Green = object used for the 3D shape and texture.';
+  const key = `${scan.id}:${scan.status?.finished || ''}`;
+  if ($('maskThumbs').dataset.key === key) return;
+  $('maskThumbs').dataset.key = key;
+  $('maskThumbs').replaceChildren(...scan.photos.map(photo => Object.assign(document.createElement('img'), {
+    src: `/scans/${scan.id}/masks/${photo.name}?v=${encodeURIComponent(scan.status?.finished || '')}`, loading: 'lazy',
+    alt: `Object mask for ${photo.name}` })));
+  for (const image of $('maskThumbs').querySelectorAll('img')) image.onerror = () => image.remove();  // Unregistered photos have no mask.
+}
+
 async function refresh() {
   try {
     plan ??= await json('/api/plan');
+    details ??= (await json('/api/health')).details;
     const scans = await json('/api/scans');
     if (!scans.length) return;
     selected ??= scans[0].id;

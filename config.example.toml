@@ -20,3 +20,14 @@ lan = false
 port = 8443
 tls_cert = 'certs/lan.pem'
 tls_key = 'certs/lan-key.pem'
+
+# Object masks: "auto" uses SAM 2 when .venv-sam2 and the checkpoint exist (see models/README.md),
+# otherwise GrabCut. "grabcut" turns SAM 2 off; "sam2" is like auto but flags a missing install.
+masks = "auto"
+# segmentation_python = '.venv-sam2/Scripts/python.exe'   # default: .venv-sam2 in this folder
+sam2_checkpoint = 'models/sam2.1_hiera_tiny.pt'
+segmentation_device = "auto"   # auto, cuda or cpu
+
+# Game asset (object.glb): low = 1,000 triangles / 1024 px texture (low poly), standard = 5,000 / 2048,
+# high = 20,000 / 4096. The dashboard can rebuild a scan at another detail without rerunning COLMAP.
+detail = "standard"

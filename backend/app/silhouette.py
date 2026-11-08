@@ -10,7 +10,8 @@ all photos. Steps:
    where the cameras' viewing directions converge, dropped onto that plane.
 3. Outline the object in each photo with GrabCut (classical computer vision, not ML), told that table
    pixels away from the object are background, then refined once with the first carving result.
-   Per-photo masks from elsewhere (e.g. an ML segmenter) can be supplied instead.
+   SAM 2 (pretrained ML segmentation, ai_masks.py) then predicts each photo's mask from a box and point
+   projected from that first carving, and replaces GrabCut in every photo where the two broadly agree.
 4. Carve a voxel grid above the table, mesh it (marching cubes), smooth, and colour vertices from the
    photos that face them.
 
@@ -238,6 +239,11 @@ def carve(scene, masks: dict, grid=GRID):
     volume = labels == sizes.argmax()
     if volume.mean() > .5:
         raise ValueError("The outlines did not isolate an object (more than half the search box is filled)")
+    # Close pinholes and tunnels a few voxels wide (outline noise, thin straps): they give the mesh handles
+    # that simplification pinches into non-manifold edges. Real openings wider than that stay open.
+    closed = ndimage.binary_closing(np.pad(volume, 3), iterations=3)[3:-3, 3:-3, 3:-3]
+    score = np.where(closed & ~volume, np.maximum(score, .5), score)
+    volume = closed
     keep = ndimage.binary_dilation(volume, iterations=2)
     score = np.where(keep, score, -tolerance - .5)
     return volume, ndimage.gaussian_filter(score, 1.0), (radius, height)
@@ -294,8 +300,16 @@ def y_up(mesh):
 
 
 def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object", masks_dir: Path | None = None,
-                       target_triangles=5000, texture_size=2048, height_cm=None) -> dict:
-    """Export a photo-textured game asset and a separate vertex-coloured high-resolution mesh."""
+                       target_triangles=5000, texture_size=2048, height_cm=None, segment=None,
+                       mask_cache: Path | None = None, previews: Path | None = None) -> dict:
+    """Export a photo-textured game asset and a separate vertex-coloured high-resolution mesh.
+
+    segment: optional ML segmenter (see ai_masks.make_segmenter), given the rough object region and the
+    GrabCut masks; it returns its own per-photo masks and a summary. mask_cache: folder where the chosen
+    masks are saved, and reused on a later call (a detail-only rebuild skips segmentation).
+    previews: folder for small mask overlay images shown on the dashboard.
+    """
+    from .ai_masks import load_masks, save_masks, save_previews
     from .game_asset import asset_frame, build_game_asset
     started = time.monotonic()
     if height_cm is not None and (not np.isfinite(height_cm) or height_cm <= 0):
@@ -315,9 +329,14 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     missing = [name for name, photo in photos.items() if photo is None]
     if missing:
         raise ValueError(f"Cannot read {len(missing)} registered photos (e.g. {missing[0]})")
+    warnings = []
+    cached = load_masks(mask_cache, photos) if mask_cache else None
     if masks_dir:
         masks = {name: cv2.imread(str(masks_dir / f"{name}.png"), cv2.IMREAD_GRAYSCALE) > 127 for name in photos}
-        source = "supplied masks"
+        mask_info = dict(method="supplied masks")
+    elif cached:
+        masks, mask_info = cached
+        mask_info = {**mask_info, "reused": True}
     else:
         box = [[BOX_RADIUS * scene.orbit * np.cos(a), BOX_RADIUS * scene.orbit * np.sin(a), z]
                for a in np.linspace(0, 2 * np.pi, 24, endpoint=False) for z in (0, BOX_HEIGHT * scene.orbit)]
@@ -327,8 +346,17 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
         r, h = extent
         cells = np.argwhere(volume)
         region = np.c_[-r + 2 * r * steps[cells[:, 0]], -r + 2 * r * steps[cells[:, 1]], h * steps[cells[:, 2]]]
-        masks = grabcut_masks(scene, photos, scene.world(region[:: max(1, len(region) // 4000)]))
-        source = "GrabCut outlines (2 passes)"
+        region = scene.world(region[:: max(1, len(region) // 4000)])
+        masks = grabcut_masks(scene, photos, region)
+        mask_info = dict(method="GrabCut", sam2=0, grabcut=len(masks))
+        if segment:
+            masks, mask_info = segment(scene, photos, images, region, masks)
+        if mask_cache:
+            save_masks(masks, mask_info, mask_cache)
+        if previews:
+            save_previews(photos, masks, mask_info, previews)
+    if mask_info.get("note"):
+        warnings.append(mask_info["note"])
     volume, score, extent = carve(scene, masks)
     mesh = mesh_volume(score, extent)
     coloured = colour(mesh, scene, photos, masks)
@@ -339,7 +367,6 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
     game_files = [f"{stem}{suffix}" for suffix in (".glb", ".obj", ".mtl", "_albedo.png")]
     for name in game_files:
         (output / name).unlink(missing_ok=True)
-    warnings = []
     game = None
     game_started = time.monotonic()
     try:
@@ -351,7 +378,8 @@ def reconstruct_object(workspace: Path, images: Path, output: Path, stem="object
             (output / name).unlink(missing_ok=True)
         warnings.append(f"Game asset failed; {stem}_hires.glb retained: {type(error).__name__}: {error}")
     touching = bool(volume[[0, -1]].any() or volume[:, [0, -1]].any() or volume[:, :, -1].any())
-    return dict(faces=int(len(mesh.faces)), photos=len(model_images), masks=source, coloured_fraction=round(coloured, 3),
+    return dict(faces=int(len(mesh.faces)), photos=len(model_images),
+                masks={k: v for k, v in mask_info.items() if k not in ('per_photo', 'scores')}, coloured_fraction=round(coloured, 3),
                 size_relative_to_orbit=[round(float(v), 3) for v in mesh.extents / scene.orbit], clipped=touching,
                 hires=dict(triangles=len(mesh.faces), texture_size=None, coverage=round(coloured, 4),
                            seconds=round(hires_seconds, 2)), game_asset=game,

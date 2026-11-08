@@ -64,9 +64,28 @@ def inspect_machine() -> dict:
         "dependencies": dependencies, "tools": tools, "capture_ready": capture_ready,
         "reconstruction_prerequisites_found": capture_ready and tools["colmap"]["ok"] and tools["nvidia-smi"]["ok"],
         "real_reconstruction_verified": False,
+        "segmentation": segmentation(settings),
         "limitations": ["Tool discovery does not prove GPU compatibility or a successful reconstruction.",
-                        "Current export is an experimental mesh; UV texturing, Blender cleanup, and SAM 2 integration are not implemented."],
+                        "SAM 2 is only checked for files here; the first reconstruction shows whether it ran (status message, sam2.log)."],
     }
+
+
+def segmentation(settings) -> dict:
+    """SAM 2 environment and checkpoint (see models/README.md)."""
+    import hashlib
+    from backend.app.ai_masks import sam2_tools
+    python, checkpoint, problem = sam2_tools(settings)
+    report = {"masks": settings.masks, "python": python, "checkpoint": str(checkpoint), "ok": problem is None,
+              "problem": problem}
+    if checkpoint.is_file():
+        digest = hashlib.sha256()
+        with checkpoint.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        report["checkpoint_sha256"] = digest.hexdigest()
+    if settings.masks == "grabcut":
+        report["note"] = "masks = grabcut: SAM 2 is not used."
+    return report
 
 
 def main() -> int:

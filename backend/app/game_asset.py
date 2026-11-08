@@ -20,9 +20,20 @@ def decimate(mesh, target):
         raise ValueError("target_triangles must be an integer of at least 16")
     if len(mesh.faces) <= target:
         return mesh.copy()
-    vertices, faces = fast_simplification.simplify(
-        np.asarray(mesh.vertices), np.asarray(mesh.faces), target_count=target)
-    result = trimesh.Trimesh(vertices, faces, process=True)
+    # One big collapse can pinch thin parts into non-manifold edges (measured on a real scan at 1000 and
+    # 5000 triangles). Halving in stages, and retrying a stage that breaks a closed surface, keeps it closed.
+    result = mesh
+    while len(result.faces) > target:
+        step = max(target, len(result.faces) // 2)
+        for attempt in range(4):
+            vertices, faces = fast_simplification.simplify(
+                np.asarray(result.vertices), np.asarray(result.faces), target_count=max(16, step - attempt * step // 20))
+            candidate = trimesh.Trimesh(vertices, faces, process=True)
+            if candidate.is_watertight or not result.is_watertight:
+                break
+        result = candidate
+        if step == target or not len(result.faces):
+            break
     if not len(result.faces) or len(result.faces) > target:
         raise ValueError("Simplification did not meet the triangle budget")
     result.fix_normals()

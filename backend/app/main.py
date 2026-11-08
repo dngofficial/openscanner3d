@@ -24,9 +24,9 @@ from PIL import Image, UnidentifiedImageError
 import uvicorn
 
 from . import coverage, network, quality
-from .config import load_settings, project_path, resolve_tool
+from .config import DETAIL, load_settings, project_path, resolve_tool
 from .images import MAX_UPLOAD_BYTES, decode_jpeg, normalize_photo
-from .reconstruction import _heavy_job, reconstruct
+from .reconstruction import PREVIEWS, _heavy_job, rebuild_object, reconstruct
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
@@ -141,9 +141,14 @@ def write(path: Path, value):
 
 def describe(scan: Path) -> dict:
     meta, poses = read(scan / "scan.json", {}), read(scan / "poses.json", [])
+    obj = read(scan / "object.json", None)
+    masks = read(scan / PREVIEWS / "masks.json", None)
     return dict(id=scan.name, **meta, photos=poses, coverage=coverage.summarise(poses),
                 status=read(scan / "status.json", None),
-                files=[name for name in sorted(DOWNLOADS) if (scan / name).is_file()])
+                files=[name for name in sorted(DOWNLOADS) if (scan / name).is_file()],
+                object=obj and dict(detail=obj.get("detail"), triangles=(obj.get("game_asset") or {}).get("triangles"),
+                                    texture=(obj.get("game_asset") or {}).get("texture_size"), clipped=obj.get("clipped")),
+                masks=masks, rebuildable=(scan / "run.json").is_file())
 
 
 @app.post("/api/scans")
@@ -167,7 +172,8 @@ def scan_details(scan_id: str):
     return describe(folder(scan_id))
 
 
-def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | None, imported: bool = False) -> dict:
+def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | None, imported: bool = False,
+              tap: tuple[float, float] | None = None) -> dict:
     """Check and store one photo. Imported gallery photos (the no-live-camera fallback) are kept as uploaded in
     originals/ and stored upright, at most 3200 px, as the working JPEG; they carry no angle data."""
     original = None
@@ -208,6 +214,8 @@ def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | Non
         poses.append(dict(name=name, azimuth=azimuth, pitch=pitch, ring=ring,
                           sector=coverage.sector_of(azimuth) if ring is not None else None,
                           imported=imported, time=now(), quality={key: round(value, 3) for key, value in values.items()}))
+        if tap and not any(pose.get("tap") for pose in poses):
+            poses[-1]["tap"] = [round(tap[0], 4), round(tap[1], 4)]  # Where the object is, as image fractions.
         write(scan / "poses.json", poses)
         if not meta.get("size"):
             write(scan / "scan.json", {**meta, "size": list(size)})
@@ -218,7 +226,8 @@ def add_photo(scan: Path, data: bytes, azimuth: float | None, pitch: float | Non
 @app.post("/api/scans/{scan_id}/photos")
 async def upload_photo(scan_id: str, request: Request,
                        azimuth: float | None = Query(None, ge=-720, le=720), pitch: float | None = Query(None, ge=-90, le=90),
-                       imported: bool = Query(False)):
+                       imported: bool = Query(False),
+                       tap_x: float | None = Query(None, ge=0, le=1), tap_y: float | None = Query(None, ge=0, le=1)):
     scan = folder(scan_id)
     if int(request.headers.get("content-length") or 0) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Photo exceeds 25 MB")
@@ -227,7 +236,8 @@ async def upload_photo(scan_id: str, request: Request,
         data += chunk
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "Photo exceeds 25 MB")
-    return await asyncio.to_thread(add_photo, scan, bytes(data), azimuth, pitch, imported)
+    tap = (tap_x, tap_y) if tap_x is not None and tap_y is not None else None
+    return await asyncio.to_thread(add_photo, scan, bytes(data), azimuth, pitch, imported, tap)
 
 
 @app.delete("/api/scans/{scan_id}/photos/last")
@@ -285,6 +295,42 @@ def start_reconstruction(scan_id: str):
     return JSONResponse(dict(state="running"), status_code=202)
 
 
+@app.post("/api/scans/{scan_id}/object")
+def start_object_rebuild(scan_id: str, detail: str = Query(..., pattern="^(low|standard|high)$")):
+    """Rebuild only the object model from the existing COLMAP run, e.g. as a low-poly asset."""
+    scan = folder(scan_id)
+    if SETTINGS.mode != "reconstruct":
+        raise HTTPException(409, "This laptop is in capture mode.")
+    if not (scan / "run.json").is_file():
+        raise HTTPException(409, "Reconstruct the scan first.")
+    if _heavy_job.locked():
+        raise HTTPException(409, "Another reconstruction is running.")
+    triangles, texture = DETAIL[detail]
+    write(scan / "status.json", dict(state="running", started=now(),
+                                     message=f"Rebuilding the object: {detail} detail ({triangles} triangles, {texture} px texture)."))
+
+    def run():
+        try:
+            result = rebuild_object(scan, SETTINGS, detail)
+            write(scan / "status.json", dict(state="ready" if result.get("done") else "failed", finished=now(),
+                                             message=result.get("msg", "")))
+        except Exception:
+            logging.exception("Object rebuild failed")
+            write(scan / "status.json", dict(state="failed", finished=now(), message="Object rebuild failed; see the server console."))
+    threading.Thread(target=run, daemon=True).start()
+    return JSONResponse(dict(state="running"), status_code=202)
+
+
+@app.get("/scans/{scan_id}/masks/{name}")
+def mask_preview(scan_id: str, name: str):
+    if not re.fullmatch(PHOTO, name):
+        raise HTTPException(404)
+    path = folder(scan_id) / PREVIEWS / name
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/scans/{scan_id}/images/{name}")
 def photo(scan_id: str, name: str):
     if not re.fullmatch(PHOTO, name):
@@ -305,7 +351,8 @@ def download(scan_id: str, name: str):
 
 @app.get("/api/health")
 def health():
-    return dict(status="ok", mode=SETTINGS.mode, lan=SETTINGS.lan, colmap_found=bool(resolve_tool(SETTINGS.colmap)))
+    return dict(status="ok", mode=SETTINGS.mode, lan=SETTINGS.lan, colmap_found=bool(resolve_tool(SETTINGS.colmap)),
+                detail=SETTINGS.detail, details={key: dict(triangles=t, texture=x) for key, (t, x) in DETAIL.items()})
 
 
 def recover():
