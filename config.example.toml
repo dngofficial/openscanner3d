@@ -12,3 +12,9 @@ blender = 'blender'
 quality = "low"
 timeout_seconds = 1800
 max_photos = 100
+
+# Fractional [x0, y0, x1, y1] regions where no features are detected, live or in COLMAP.
+# Omitting the key uses the built-in default, which covers the Camo free-tier watermark
+# (measured on 1280x720 frames; recheck at other resolutions). Use [] for unwatermarked photos.
+# Masks steer pose estimation only; dense reconstruction still sees the full image.
+# feature_mask_regions = [[0.875, 0.785, 0.975, 0.975]]

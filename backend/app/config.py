@@ -16,6 +16,9 @@ class Settings:
     quality: str = "low"
     timeout_seconds: int = 1800
     max_photos: int = 100
+    # Fractional [x0, y0, x1, y1] regions excluded from feature detection. The default covers the
+    # Camo free-tier watermark, measured on a 1280x720 Camo stream; use [] for unwatermarked input.
+    feature_mask_regions: tuple = ((0.875, 0.785, 0.975, 0.975),)
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -26,6 +29,8 @@ def load_settings(path: Path | None = None) -> Settings:
     unknown = set(values) - set(Settings.__dataclass_fields__)
     if unknown:
         raise ValueError(f"Unknown configuration keys: {', '.join(sorted(unknown))}")
+    if "feature_mask_regions" in values:
+        values["feature_mask_regions"] = parse_regions(values["feature_mask_regions"])
     settings = Settings(**values)
     if settings.mode not in {"capture", "reconstruct"}:
         raise ValueError("mode must be capture or reconstruct")
@@ -39,6 +44,20 @@ def load_settings(path: Path | None = None) -> Settings:
         if not isinstance(getattr(settings, key), str) or not getattr(settings, key).strip():
             raise ValueError(f"{key} must be an executable name or path")
     return settings
+
+
+def parse_regions(value) -> tuple:
+    message = "feature_mask_regions must be a list of up to 8 [x0, y0, x1, y1] fractions with x0 < x1 and y0 < y1"
+    if not isinstance(value, list) or len(value) > 8:
+        raise ValueError(message)
+    regions = []
+    for region in value:
+        if (not isinstance(region, list) or len(region) != 4
+                or not all(type(v) in (int, float) and 0 <= v <= 1 for v in region)
+                or region[0] >= region[2] or region[1] >= region[3]):
+            raise ValueError(message)
+        regions.append(tuple(float(v) for v in region))
+    return tuple(regions)
 
 
 def resolve_tool(value: str) -> str | None:

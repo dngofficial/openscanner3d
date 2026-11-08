@@ -40,7 +40,9 @@ def inspect_machine() -> dict:
             tools[name] = {"ok": False, "output": "Not found; configure the executable path or PATH."}
         elif name == "colmap":
             try:
-                tools[name] = {"ok": True, "path": executable, "output": colmap_help(executable)[:6000]}
+                output = colmap_help(executable)
+                tools[name] = {"ok": True, "path": executable, "mask_path_supported": "--mask_path" in output,
+                               "output": output[:6000]}
             except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
                 tools[name] = {"ok": False, "path": executable, "output": str(error)}
         else:

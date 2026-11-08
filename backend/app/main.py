@@ -17,6 +17,7 @@ from .config import load_settings, resolve_tool
 from .reconstruction import reconstruct
 from .images import decode_jpeg, normalize_photo, MAX_FRAME_BYTES, MAX_UPLOAD_BYTES
 from .capture_quality import continuity
+from .masks import region_mask
 
 BASE = Path(__file__).resolve().parents[2]
 SCANS = BASE / "scans"
@@ -53,7 +54,7 @@ class Scan:
         s.state = "preview"
         s.accepted = False
         s.photos = []; s.last_photo = None; s.force_capture = False; s.capture_note = "Waiting for a usable frame"
-        s.K = None; s.kfs = []; s.pts = np.zeros((0, 3)); s.ptd = np.zeros((0, 128), np.float32)
+        s.K = None; s.feature_mask = None; s.kfs = []; s.pts = np.zeros((0, 3)); s.ptd = np.zeros((0, 128), np.float32)
         s.bins = np.zeros((len(EL_EDGES) + 1, AZ), int); s.cur = None; s.size = 0
 
     # ---- geometry helpers -------------------------------------------------
@@ -213,11 +214,14 @@ class Scan:
             return s.fb(str(error), "bad")
         img = cv2.resize(full, (960, int(960 * full.shape[0] / full.shape[1])))
         g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY); H, W = g.shape
-        if s.K is None: s.K = np.array([[.85 * W, 0, W / 2], [0, .85 * W, H / 2], [0, 0, 1]])
+        if s.K is None:
+            s.K = np.array([[.85 * W, 0, W / 2], [0, .85 * W, H / 2], [0, 0, 1]])
+            # Static overlays would otherwise produce zero-motion matches in every continuity check.
+            s.feature_mask = region_mask(W, H, SETTINGS.feature_mask_regions) if SETTINGS.feature_mask_regions else None
         blur = round(float(cv2.Laplacian(g, cv2.CV_64F).var()), 1)
         brightness, contrast = round(float(g.mean()), 1), round(float(g.std()), 1)
         enhanced = s.clahe.apply(g)
-        kp, d = s.sift.detectAndCompute(enhanced, None)
+        kp, d = s.sift.detectAndCompute(enhanced, s.feature_mask)
         xy = np.float32([k.pt for k in kp]).reshape(-1, 2)
         s.visual_features(xy, d, W, H)
         info = dict(blur=blur, feats=len(kp), brightness=brightness, contrast=contrast)

@@ -6,6 +6,7 @@ import threading
 import uuid
 
 from .config import Settings, resolve_tool
+from .masks import write_colmap_masks
 
 _heavy_job = threading.Lock()
 REQUIRED_FLAGS = ("--workspace_path", "--image_path", "--quality", "--single_camera", "--mesher")
@@ -48,13 +49,20 @@ def reconstruct(images: Path, output: Path, settings: Settings) -> dict:
     if not _heavy_job.acquire(blocking=False):
         return dict(msg="Another reconstruction is running. Try Finish again when it completes.", lvl="warn", done=False)
     try:
-        colmap_help(executable)
+        help_text = colmap_help(executable)
+        if settings.feature_mask_regions and "--mask_path" not in help_text:
+            return dict(msg="Installed COLMAP lacks --mask_path, so the configured watermark mask cannot be applied. "
+                            "Set feature_mask_regions = [] only for unwatermarked photos.", lvl="bad", done=False)
         # Separate each attempt so a failed rerun cannot reuse a stale mesh.
         workspace = output / "runs" / uuid.uuid4().hex
         workspace.mkdir(parents=True)
         command = [executable, "automatic_reconstructor", "--workspace_path", str(workspace),
                    "--image_path", str(images), "--quality", settings.quality,
                    "--single_camera", "1", "--mesher", "poisson"]
+        if settings.feature_mask_regions:
+            # Masks only exclude features (pose estimation); dense stereo still sees the full image.
+            write_colmap_masks(images, workspace / "masks", settings.feature_mask_regions)
+            command += ["--mask_path", str(workspace / "masks")]
         code = run_logged(command, output / "colmap.log", settings.timeout_seconds)
         if code:
             return dict(msg=f"COLMAP exited with code {code}. See colmap.log.", lvl="bad", done=False)

@@ -27,6 +27,8 @@ This is progress within the existing plan, not a replacement roadmap. The captur
 - [x] Freeze only the confirmed selection/settings for reconstruction and provide a reviewed image ZIP for partner transfer.
 - [x] Verify preview/pause behavior, unrelated-scene rejection, and selected-only input snapshots in automated tests.
 - [x] Verify browser import → thumbnail review → exclusion → confirmation → ZIP link using synthetic images.
+- [x] Mask the static Camo watermark during live SIFT and COLMAP feature extraction (`--mask_path`, refused if unsupported). Verified on the real reviewed set: mask placement plus fewer zero-motion matches. Its effect on COLMAP registration is not yet measured.
+- [ ] Recapture with a full orbit at 2–3 heights. The first reviewed set covers only about 90–120° of a dark, low-texture object.
 - [ ] Rehearse the new controls with Samsung/Camo on a stationary textured object; measure acceptance/rejection behavior and tune thresholds if necessary.
 - [ ] Complete real GPU reconstruction and independently inspect the textured result on the partner machine (Phase 0 remains open).
 

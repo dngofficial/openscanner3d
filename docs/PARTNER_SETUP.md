@@ -29,6 +29,8 @@ Doctor checks dependency imports, available disk, NVIDIA driver reporting, COLMA
 
 ## 3. Run a real reconstruction
 
+Doctor's `mask_path_supported` must be `true` for Camo input. By default, the adapter masks the Camo watermark corner during COLMAP feature extraction. If your build lacks `--mask_path`, reconstruction stops with an explanation instead of silently using the watermark. Disable masking with `feature_mask_regions = []` only for unwatermarked photos.
+
 Set `mode = "reconstruct"` in `config.local.toml`. Start with `quality = "low"` and a curated, overlapping set; the default 100-photo cap and 30-minute timeout are limits, not performance promises. Keep enough free disk for repeated dense workspaces.
 
 For an interactive capture:
@@ -52,6 +54,7 @@ The adapter checks the installed `automatic_reconstructor -h` options, explicitl
 - [ ] Record actual Python/dependency, COLMAP, NVIDIA driver, and Blender versions.
 - [ ] Save the doctor report and exact input set locally.
 - [ ] Run a real scan and inspect `colmap.log`, elapsed time, and peak VRAM.
+- [ ] Record registered images out of the input count, and the mean reprojection error of the sparse model. This separates capture problems from dense/GPU problems.
 - [ ] Open the resulting `mesh.glb` independently in Blender.
 - [ ] Record missing surfaces, background contamination, material appearance, and scale limitations.
 - [ ] Repeat with the Samsung/Camo input set.

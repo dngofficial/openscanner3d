@@ -51,6 +51,8 @@ Follow [PARTNER_SETUP.md](docs/PARTNER_SETUP.md). After the CPU setup works, con
 ./scripts/launch.ps1 -Mode reconstruct
 ```
 
+Camo's free tier burns a watermark into the bottom-right of every frame. Because it never moves, it produces zero-motion matches that conflict with real camera motion. By default, `feature_mask_regions` excludes that corner from live SIFT tracking. The reconstruction adapter also writes one COLMAP mask per image (`runs/<attempt>/masks/<image>.png`) and passes `--mask_path`. Reconstruction refuses to start if the installed COLMAP lacks that option, and doctor reports `mask_path_supported`. On the reviewed 77-frame Camo set, masking cut near-zero-motion SIFT matches between frames four apart from 87 to 7. That measures feature cleanup, not reconstruction success. Masks affect feature extraction only, not dense stereo. Set `feature_mask_regions = []` for photos without a watermark.
+
 Tool discovery is not proof of successful reconstruction. The current adapter produces an **experimental mesh**, not a verified textured or quad-topology model. UV texturing, Blender processing, SAM 2, and the 3D viewer remain unimplemented. Blender discovery in doctor is informational; the current export uses trimesh.
 
 ## Storage and configuration
@@ -92,6 +94,6 @@ Node is optional for the application and used only for camera-helper tests. CPU 
 
 ## Current limitations
 
-Tracking uses guessed intrinsics and can include background features; coverage and distance prompts are approximate, and scale is arbitrary. Keep the object stationary and avoid lens changes, Camo effects, auto-framing, or rotating the phone mid-scan. There is no guarantee of watertightness, quad topology, physical accuracy, or complete unseen surfaces.
+`sparse.ply` is the browser's live tracking map: a few hundred points from guessed intrinsics. It is not COLMAP output and not a mesh; converting it to OBJ/STL only produces point markers. Tracking uses guessed intrinsics and can include background features; coverage and distance prompts are approximate, and scale is arbitrary. Keep the object stationary and avoid lens changes, Camo effects, auto-framing, or rotating the phone mid-scan. There is no guarantee of watertightness, quad topology, physical accuracy, or complete unseen surfaces.
 
 Direct phone-browser access over LAN requires trusted HTTPS and access controls; that deployment is not configured by these scripts. The supported initial route is Camo into a laptop-local browser. After initial dependency installation, our runtime has no remote font or cloud API dependency; verify Camo's operation with the chosen connection during the offline rehearsal.

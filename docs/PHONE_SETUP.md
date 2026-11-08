@@ -12,6 +12,15 @@ The partner reports that the existing iPhone/Camo workflow works. Preserve that 
 6. The app prefers a device whose name contains Camo. If needed, press **Refresh cameras**, choose Camo explicitly, and check that the live preview is your phone's view.
 7. Frame the stationary object before pressing **Start scan**. Use **Pause** when repositioning or handling the phone; preview continues without saving. **Finish & review** lets you exclude unsuitable shots before confirming the selection and downloading the reviewed image ZIP.
 
+## Capturing a set that can reconstruct
+
+The first reviewed set (77 frames of a dark power bank) covered only about a quarter orbit, so COLMAP can at best rebuild one side. For the next capture:
+
+- **Full orbit.** Walk all the way around the object, then repeat at 2–3 heights (low oblique, about 45°, and near top-down). Unseen sides cannot be reconstructed.
+- **Texture.** Dark, smooth, uniform objects give few features. Prefer a matte, patterned object, or place the object on newspaper or a printed mat so the background helps registration.
+- **Fixed framing.** Turn off Camo stabilisation, auto-framing, and effects. Black wedges in frame corners mean the image is being warped, which breaks the shared-camera assumption.
+- **Watermark.** The default mask removes the free-tier Camo watermark. A watermark-free output (Camo Pro) is still preferable. If the watermark moves or the resolution changes, recheck `feature_mask_regions`.
+
 Do not open localhost on the phone for this workflow. The laptop browser receives Camo's webcam feed; the phone runs Camo Camera.
 
 ## Failure recovery
