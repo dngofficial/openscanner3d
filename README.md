@@ -1,4 +1,6 @@
 # Local object scanner
+<img width="1280" height="720" alt="maxresdefault" src="https://github.com/user-attachments/assets/399b475f-88d9-4560-9daa-bfa0bf7a3038" />
+
 
 The phone's browser connects directly to the laptop over your Wi-Fi (HTTPS, no app). It guides you to every missing angle of a stationary object and uploads the photos to the laptop, which stores and reconstructs them. Nothing leaves the local network. `PLAN.md` is the scope authority; `AGENTS.md` lists the project rules.
 
